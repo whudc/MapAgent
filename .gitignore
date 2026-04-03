@@ -1,0 +1,7 @@
+.vscode/
+data/
+
+Qwen/
+gemma4/
+
+*.pyc

@@ -12,6 +12,7 @@ from agents.base import BaseAgent, AgentContext
 from agents.scene import SceneAgent
 from agents.behavior import BehaviorAgent
 from agents.path import PathAgent
+from agents.traffic_flow import TrafficFlowAgent
 from agents.master import MasterAgent, create_master_agent
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "SceneAgent",
     "BehaviorAgent",
     "PathAgent",
+    "TrafficFlowAgent",
     "MasterAgent",
     "create_master_agent",
 ]

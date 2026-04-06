@@ -46,7 +46,7 @@ MapAgent/
 ### 1. 创建虚拟环境
 
 ```bash
-conda create -n mapagent python=3.10
+conda create -n mapagent python=3.12
 conda activate mapagent
 ```
 

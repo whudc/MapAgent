@@ -14,6 +14,7 @@ class IntentType(str, Enum):
     SCENE_UNDERSTANDING = "scene"      # 场景理解类
     BEHAVIOR_ANALYSIS = "behavior"     # 行为分析类
     PATH_PLANNING = "path"             # 路径规划类
+    TRAFFIC_FLOW_RECONSTRUCTION = "traffic_flow"  # 交通流重建类
     GENERAL_QUERY = "general"          # 通用查询类
     UNKNOWN = "unknown"                # 无法识别
 
@@ -186,3 +187,118 @@ class AgentResponse(BaseModel):
     result: Optional[Any] = Field(None, description="结果数据")
     response_text: str = Field(default="", description="自然语言回复")
     error: Optional[str] = Field(None, description="错误信息")
+
+
+# ==================== 交通流重建 Agent ====================
+
+class VehicleState(BaseModel):
+    """单个车辆在某帧的状态"""
+    frame_id: int = Field(..., description="帧ID")
+    timestamp: Optional[float] = Field(None, description="时间戳")
+    vehicle_id: int = Field(..., description="车辆ID")
+    vehicle_type: str = Field(default="Car", description="车辆类型")
+    position: Tuple[float, float, float] = Field(..., description="位置坐标")
+    size: Tuple[float, float, float] = Field(default=(4.0, 2.0, 1.5), description="尺寸")
+    rotation: Tuple[float, float, float] = Field(default=(0.0, 0.0, 0.0), description="旋转角度")
+    velocity: Tuple[float, float, float] = Field(default=(0.0, 0.0, 0.0), description="速度")
+    heading: Optional[float] = Field(None, description="航向角(度)")
+    speed: Optional[float] = Field(None, description="速度大小(m/s)")
+    matched_lane: Optional[str] = Field(None, description="匹配的车道ID")
+    behavior: Optional[str] = Field(None, description="推断的行为")
+
+    def to_dict(self) -> Dict:
+        return {
+            "frame_id": self.frame_id,
+            "timestamp": self.timestamp,
+            "vehicle_id": self.vehicle_id,
+            "vehicle_type": self.vehicle_type,
+            "position": list(self.position),
+            "size": list(self.size),
+            "rotation": list(self.rotation),
+            "velocity": list(self.velocity),
+            "heading": self.heading,
+            "speed": self.speed,
+            "matched_lane": self.matched_lane,
+            "behavior": self.behavior
+        }
+
+
+class VehicleTrajectory(BaseModel):
+    """单个车辆的完整轨迹"""
+    vehicle_id: int = Field(..., description="车辆ID")
+    vehicle_type: str = Field(default="Car", description="车辆类型")
+    states: List[VehicleState] = Field(default_factory=list, description="轨迹状态序列")
+    start_frame: int = Field(default=0, description="起始帧")
+    end_frame: int = Field(default=0, description="结束帧")
+    total_distance: float = Field(default=0.0, description="总行驶距离")
+    avg_speed: float = Field(default=0.0, description="平均速度")
+    behaviors: List[str] = Field(default_factory=list, description="行为序列")
+
+    def to_dict(self) -> Dict:
+        return {
+            "vehicle_id": self.vehicle_id,
+            "vehicle_type": self.vehicle_type,
+            "states": [s.to_dict() for s in self.states],
+            "start_frame": self.start_frame,
+            "end_frame": self.end_frame,
+            "total_distance": self.total_distance,
+            "avg_speed": self.avg_speed,
+            "behaviors": self.behaviors
+        }
+
+
+class FrameData(BaseModel):
+    """单帧交通流数据"""
+    frame_id: int = Field(..., description="帧ID")
+    timestamp: Optional[float] = Field(None, description="时间戳")
+    vehicles: List[VehicleState] = Field(default_factory=list, description="该帧所有车辆状态")
+    vehicle_count: int = Field(default=0, description="车辆数量")
+    ego_position: Optional[Tuple[float, float, float]] = Field(None, description="自车位置")
+    ego_velocity: Optional[Tuple[float, float, float]] = Field(None, description="自车速度")
+
+    def to_dict(self) -> Dict:
+        return {
+            "frame_id": self.frame_id,
+            "timestamp": self.timestamp,
+            "vehicles": [v.to_dict() for v in self.vehicles],
+            "vehicle_count": self.vehicle_count,
+            "ego_position": list(self.ego_position) if self.ego_position else None,
+            "ego_velocity": list(self.ego_velocity) if self.ego_velocity else None
+        }
+
+
+class TrafficFlowQuery(BaseModel):
+    """交通流重建查询"""
+    question: str = Field(..., description="用户问题")
+    detection_path: str = Field(..., description="检测结果目录路径")
+    start_frame: Optional[int] = Field(None, description="起始帧")
+    end_frame: Optional[int] = Field(None, description="结束帧")
+    output_path: Optional[str] = Field(None, description="输出结果路径")
+    use_llm_inference: bool = Field(default=True, description="是否使用LLM推理补充")
+
+
+class TrafficFlowResult(BaseModel):
+    """交通流重建结果"""
+    success: bool = Field(default=True, description="是否成功")
+    trajectories: List[Dict] = Field(default_factory=list, description="所有车辆轨迹")
+    frames: List[Dict] = Field(default_factory=list, description="帧数据序列")
+    total_frames: int = Field(default=0, description="总帧数")
+    total_vehicles: int = Field(default=0, description="车辆总数")
+    duration_seconds: float = Field(default=0.0, description="时长(秒)")
+    summary: str = Field(default="", description="交通流概述")
+    output_file: Optional[str] = Field(None, description="输出文件路径")
+    reconstruction_stats: Optional[Dict[str, Any]] = Field(None, description="重建统计信息")
+
+    def to_response_text(self) -> str:
+        """生成自然语言回复"""
+        parts = [f"交通流重建完成。"]
+        parts.append(f"共处理 {self.total_frames} 帧，{self.total_vehicles} 辆车辆。")
+        parts.append(f"时长: {self.duration_seconds:.1f} 秒。")
+        if self.summary:
+            parts.append(self.summary)
+        if self.output_file:
+            parts.append(f"结果已保存至: {self.output_file}")
+        return " ".join(parts)
+
+    def to_dict(self) -> Dict:
+        return self.model_dump(exclude_none=True)

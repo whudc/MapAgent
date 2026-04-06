@@ -3,5 +3,9 @@ data/
 
 Qwen/
 gemma4/
+test_output/
 
 *.pyc
+*.csv
+*.json
+*.txt

@@ -2,12 +2,13 @@
 MapAgent Web UI - 优化版
 
 使用缓存和视图裁剪优化渲染速度
+支持交通流重建和可视化
 """
 
 import sys
 import os
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict, Any
 import json
 
 # 添加项目路径
@@ -22,6 +23,161 @@ import numpy as np
 from apis.map_api import MapAPI
 from agents.master import MasterAgent, create_master_agent
 from config import settings
+
+
+# 车辆类型颜色映射
+VEHICLE_COLORS = {
+    'Car': '#3B82F6',      # 蓝色
+    'Truck': '#EF4444',    # 红色
+    'Bus': '#F59E0B',      # 橙色
+    'Non_motor_rider': '#10B981',  # 绿色
+    'Unknown': '#9CA3AF',  # 灰色
+}
+
+
+class TrafficFlowVisualizer:
+    """交通流可视化器"""
+
+    def __init__(self):
+        self._frames: List[Dict] = []
+        self._trajectories: List[Dict] = []
+        self._current_frame_idx: int = 0
+        self._map_visualizer: Optional['FastMapVisualizer'] = None
+
+    def set_data(self, result: Dict):
+        """设置交通流数据"""
+        self._frames = result.get('frames', [])
+        self._trajectories = result.get('trajectories', [])
+        self._current_frame_idx = 0
+
+    def set_map_visualizer(self, visualizer: 'FastMapVisualizer'):
+        """设置地图可视化器"""
+        self._map_visualizer = visualizer
+
+    def get_frame_count(self) -> int:
+        """获取帧数"""
+        return len(self._frames)
+
+    def get_current_frame_idx(self) -> int:
+        """获取当前帧索引"""
+        return self._current_frame_idx
+
+    def set_current_frame(self, idx: int):
+        """设置当前帧"""
+        if 0 <= idx < len(self._frames):
+            self._current_frame_idx = idx
+
+    def draw_frame(self, frame_idx: int = None,
+                   show_trajectories: bool = False,
+                   show_ids: bool = True) -> go.Figure:
+        """绘制指定帧"""
+        if frame_idx is None:
+            frame_idx = self._current_frame_idx
+
+        if not self._frames or frame_idx >= len(self._frames):
+            fig = go.Figure()
+            fig.add_annotation(text="无数据", x=0.5, y=0.5, showarrow=False)
+            return fig
+
+        frame = self._frames[frame_idx]
+        vehicles = frame.get('vehicles', [])
+
+        # 创建图形
+        fig = go.Figure()
+
+        # 计算视图范围
+        if vehicles:
+            all_x = [v['position'][0] for v in vehicles]
+            all_y = [v['position'][1] for v in vehicles]
+            margin = 50
+            x_range = (min(all_x) - margin, max(all_x) + margin)
+            y_range = (min(all_y) - margin, max(all_y) + margin)
+        else:
+            x_range, y_range = (0, 100), (0, 100)
+
+        # 绘制车辆
+        for v in vehicles:
+            pos = v.get('position', [0, 0, 0])
+            v_type = v.get('vehicle_type', 'Unknown')
+            v_id = v.get('vehicle_id', 0)
+            heading = v.get('heading', 0)
+
+            color = VEHICLE_COLORS.get(v_type, VEHICLE_COLORS['Unknown'])
+
+            # 绘制车辆矩形（简化为点+方向箭头）
+            fig.add_trace(go.Scatter(
+                x=[pos[0]], y=[pos[1]],
+                mode='markers',
+                marker=dict(
+                    size=15,
+                    color=color,
+                    symbol='square',
+                    angle=heading if heading else 0
+                ),
+                showlegend=False,
+                hovertemplate=f'<b>ID: {v_id}</b><br>类型: {v_type}<br>位置: ({pos[0]:.1f}, {pos[1]:.1f})<extra></extra>',
+                name=f'vehicle_{v_id}'
+            ))
+
+            # 显示ID标签
+            if show_ids:
+                fig.add_trace(go.Scatter(
+                    x=[pos[0]], y=[pos[1] + 3],
+                    mode='text',
+                    text=[str(v_id)],
+                    textfont=dict(size=10, color=color),
+                    showlegend=False,
+                    hoverinfo='skip'
+                ))
+
+        # 绘制轨迹（如果启用）
+        if show_trajectories and self._trajectories:
+            for traj in self._trajectories[:10]:  # 最多显示10条轨迹
+                states = traj.get('states', [])
+                if len(states) >= 2:
+                    x_coords = [s['position'][0] for s in states]
+                    y_coords = [s['position'][1] for s in states]
+                    v_id = traj.get('vehicle_id', 0)
+                    v_type = traj.get('vehicle_type', 'Unknown')
+                    color = VEHICLE_COLORS.get(v_type, VEHICLE_COLORS['Unknown'])
+
+                    fig.add_trace(go.Scatter(
+                        x=x_coords, y=y_coords,
+                        mode='lines',
+                        line=dict(color=color, width=2, dash='dot'),
+                        showlegend=False,
+                        hoverinfo='skip',
+                        name=f'traj_{v_id}'
+                    ))
+
+        # 绘制自车位置（如果有）
+        ego_pos = frame.get('ego_position')
+        if ego_pos:
+            fig.add_trace(go.Scatter(
+                x=[ego_pos[0]], y=[ego_pos[1]],
+                mode='markers',
+                marker=dict(size=20, color='purple', symbol='star'),
+                showlegend=False,
+                name='ego'
+            ))
+
+        # 添加帧信息
+        frame_id = frame.get('frame_id', 0)
+        vehicle_count = frame.get('vehicle_count', 0)
+
+        fig.update_layout(
+            title=dict(text=f"帧 {frame_id} | 车辆数: {vehicle_count}", x=0.5),
+            xaxis=dict(range=x_range, scaleratio=1),
+            yaxis=dict(range=y_range, scaleratio=1),
+            plot_bgcolor='white',
+            margin=dict(l=0, r=0, t=50, b=0),
+            height=500,
+            dragmode='pan',
+        )
+        fig.update_xaxes(showgrid=True, gridcolor='lightgray')
+        fig.update_yaxes(showgrid=True, gridcolor='lightgray')
+
+        return fig
 
 
 class FastMapVisualizer:
@@ -260,6 +416,10 @@ class MapAgentUI:
         self.start_position = None  # 起点
         self.end_position = None    # 终点
         self.current_path = None    # 当前规划路径
+        # 交通流相关
+        self.traffic_flow_visualizer = TrafficFlowVisualizer()
+        self.traffic_flow_result = None
+        self.is_playing = False
         # 预初始化 Agent
         self._pre_init_agent()
 
@@ -404,6 +564,90 @@ class MapAgentUI:
 - 中心线: {summary['total_centerlines']} 条
 - 交通标志: {summary['total_traffic_signs']} 个"""
 
+    # ========== 交通流重建相关方法 ==========
+
+    def reconstruct_traffic_flow(self, detection_path: str, start_frame: int, end_frame: int):
+        """执行交通流重建"""
+        if not self.agent:
+            return None, "请先初始化 Agent"
+
+        try:
+            # 加载检测结果
+            from agents.traffic_flow import TrafficFlowAgent
+            from agents.base import AgentContext
+
+            if not self.map_api:
+                self.init_map(str(settings.map_path))
+
+            context = AgentContext(map_api=self.map_api, llm_client=self.agent.llm_client)
+            tf_agent = TrafficFlowAgent(context)
+
+            # 执行重建
+            result = tf_agent.process(
+                query=f"基于检测结果重建交通流，检测结果位于 {detection_path}",
+                detection_path=detection_path,
+                start_frame=start_frame if start_frame >= 0 else None,
+                end_frame=end_frame if end_frame >= 0 else None,
+                output_path="reconstruction_result.json"
+            )
+
+            if result.get('success'):
+                self.traffic_flow_result = result
+                self.traffic_flow_visualizer.set_data(result)
+                return result, f"重建成功！共 {result['total_frames']} 帧，{result['total_vehicles']} 辆车辆"
+            else:
+                return result, result.get('summary', '重建失败')
+
+        except Exception as e:
+            return None, f"重建失败: {str(e)}"
+
+    def get_traffic_flow_frame(self, frame_idx: int, show_trajectories: bool, show_ids: bool):
+        """获取交通流帧可视化"""
+        if not self.traffic_flow_result:
+            fig = go.Figure()
+            fig.add_annotation(text="请先执行交通流重建", x=0.5, y=0.5, showarrow=False)
+            return fig, 0, 0
+
+        self.traffic_flow_visualizer.set_current_frame(frame_idx)
+        fig = self.traffic_flow_visualizer.draw_frame(
+            frame_idx=frame_idx,
+            show_trajectories=show_trajectories,
+            show_ids=show_ids
+        )
+
+        total_frames = self.traffic_flow_visualizer.get_frame_count()
+        return fig, frame_idx, total_frames - 1
+
+    def traffic_flow_first_frame(self, show_trajectories: bool, show_ids: bool):
+        """跳转到第一帧"""
+        return self.get_traffic_flow_frame(0, show_trajectories, show_ids)
+
+    def traffic_flow_prev_frame(self, current_idx: int, show_trajectories: bool, show_ids: bool):
+        """前一帧"""
+        new_idx = max(0, current_idx - 1)
+        return self.get_traffic_flow_frame(new_idx, show_trajectories, show_ids)
+
+    def traffic_flow_next_frame(self, current_idx: int, show_trajectories: bool, show_ids: bool):
+        """后一帧"""
+        if not self.traffic_flow_result:
+            return self.get_traffic_flow_frame(0, show_trajectories, show_ids)
+        total = self.traffic_flow_visualizer.get_frame_count()
+        new_idx = min(total - 1, current_idx + 1)
+        return self.get_traffic_flow_frame(new_idx, show_trajectories, show_ids)
+
+    def traffic_flow_last_frame(self, show_trajectories: bool, show_ids: bool):
+        """跳转到最后一帧"""
+        if not self.traffic_flow_result:
+            return self.get_traffic_flow_frame(0, show_trajectories, show_ids)
+        total = self.traffic_flow_visualizer.get_frame_count()
+        return self.get_traffic_flow_frame(total - 1, show_trajectories, show_ids)
+
+    def get_traffic_flow_summary_text(self):
+        """获取交通流摘要文本"""
+        if not self.traffic_flow_result:
+            return "尚未进行交通流重建"
+        return self.traffic_flow_result.get('summary', '无摘要信息')
+
 
 def create_ui():
     """创建 UI"""
@@ -535,63 +779,113 @@ def create_ui():
         """
         gr.HTML(js_html)
 
-        with gr.Row():
-            # 左侧：地图
-            with gr.Column(scale=2):
-                gr.Markdown("### 地图可视化")
+        # 使用 Tab 来组织不同功能
+        with gr.Tabs():
+            # Tab 1: 地图问答
+            with gr.TabItem("🗺️ 地图问答"):
+                with gr.Row():
+                    # 左侧：地图
+                    with gr.Column(scale=2):
+                        gr.Markdown("### 地图可视化")
+
+                        with gr.Row():
+                            center_x = gr.Textbox(label="中心X", placeholder="可选")
+                            center_y = gr.Textbox(label="中心Y", placeholder="可选")
+                            zoom = gr.Slider(0.5, 5.0, value=1.0, step=0.1, label="缩放")
+
+                        with gr.Row():
+                            show_lanes = gr.Checkbox(value=True, label="车道线")
+                            show_centerlines = gr.Checkbox(value=False, label="中心线")
+
+                        map_plot = gr.Plot(label="地图")
+
+                        # 选点按钮
+                        with gr.Row():
+                            set_start_btn = gr.Button("🟢 设置起点", variant="secondary", elem_id="set-start-btn")
+                            set_end_btn = gr.Button("🔴 设置终点", variant="secondary", elem_id="set-end-btn")
+                            clear_pos_btn = gr.Button("🗑️ 清空", size="sm")
+
+                        with gr.Row():
+                            start_x = gr.Number(label="起点X", interactive=False, value=None)
+                            start_y = gr.Number(label="起点Y", interactive=False, value=None)
+                            end_x = gr.Number(label="终点X", interactive=False, value=None)
+                            end_y = gr.Number(label="终点Y", interactive=False, value=None)
+
+                        pos_status = gr.Textbox(label="状态", interactive=False, lines=1)
+
+                        with gr.Row():
+                            refresh_btn = gr.Button("🔄 刷新地图")
+                            stats_btn = gr.Button("📊 统计")
+                        stats_output = gr.Textbox(label="统计", lines=4)
+
+                    # 右侧：对话
+                    with gr.Column(scale=3):
+                        gr.Markdown("### 智能对话")
+
+                        with gr.Row():
+                            provider = gr.Dropdown(
+                                choices=["deepseek", "anthropic", "openai"],
+                                value=settings.llm_provider,
+                                label="LLM 提供商"
+                            )
+                            api_key = gr.Textbox(
+                                label="API Key",
+                                type="password",
+                                placeholder="可选"
+                            )
+
+                        chatbot = gr.Chatbot(label="对话", height=500)
+                        user_input = gr.Textbox(label="输入问题", placeholder="例如：这个地图里有什么？", lines=2)
+
+                        with gr.Row():
+                            send_btn = gr.Button("发送", variant="primary")
+                            clear_btn = gr.Button("清空")
+
+            # Tab 2: 交通流重建
+            with gr.TabItem("🚗 交通流重建"):
+                gr.Markdown("### 交通流重建与可视化")
 
                 with gr.Row():
-                    center_x = gr.Textbox(label="中心X", placeholder="可选")
-                    center_y = gr.Textbox(label="中心Y", placeholder="可选")
-                    zoom = gr.Slider(0.5, 5.0, value=1.0, step=0.1, label="缩放")
+                    # 左侧：配置和输入
+                    with gr.Column(scale=1):
+                        gr.Markdown("#### 检测结果配置")
+                        tf_detection_path = gr.Textbox(
+                            label="检测结果目录",
+                            value="data/json_results",
+                            placeholder="检测结果目录路径，如 data/json_results"
+                        )
 
-                with gr.Row():
-                    show_lanes = gr.Checkbox(value=True, label="车道线")
-                    show_centerlines = gr.Checkbox(value=False, label="中心线")
+                        with gr.Row():
+                            tf_start_frame = gr.Number(label="起始帧", value=-1, precision=0)
+                            tf_end_frame = gr.Number(label="结束帧", value=-1, precision=0)
 
-                map_plot = gr.Plot(label="地图")
+                        tf_reconstruct_btn = gr.Button("🔄 开始重建", variant="primary")
+                        tf_status = gr.Textbox(label="状态", interactive=False, lines=2)
 
-                # 选点按钮
-                with gr.Row():
-                    set_start_btn = gr.Button("🟢 设置起点", variant="secondary", elem_id="set-start-btn")
-                    set_end_btn = gr.Button("🔴 设置终点", variant="secondary", elem_id="set-end-btn")
-                    clear_pos_btn = gr.Button("🗑️ 清空", size="sm")
+                        gr.Markdown("#### 显示选项")
+                        tf_show_trajectories = gr.Checkbox(label="显示轨迹", value=False)
+                        tf_show_ids = gr.Checkbox(label="显示ID", value=True)
 
-                with gr.Row():
-                    start_x = gr.Number(label="起点X", interactive=False, value=None)
-                    start_y = gr.Number(label="起点Y", interactive=False, value=None)
-                    end_x = gr.Number(label="终点X", interactive=False, value=None)
-                    end_y = gr.Number(label="终点Y", interactive=False, value=None)
+                        gr.Markdown("#### 重建摘要")
+                        tf_summary = gr.Textbox(label="摘要", interactive=False, lines=5)
 
-                pos_status = gr.Textbox(label="状态", interactive=False, lines=1)
+                    # 右侧：可视化
+                    with gr.Column(scale=2):
+                        tf_plot = gr.Plot(label="交通流可视化")
 
-                with gr.Row():
-                    refresh_btn = gr.Button("🔄 刷新地图")
-                    stats_btn = gr.Button("📊 统计")
-                stats_output = gr.Textbox(label="统计", lines=4)
+                        # 帧控制
+                        with gr.Row():
+                            tf_first_btn = gr.Button("⏮️", elem_id="tf-first-btn")
+                            tf_prev_btn = gr.Button("⏪", elem_id="tf-prev-btn")
+                            tf_play_btn = gr.Button("▶️", elem_id="tf-play-btn")
+                            tf_next_btn = gr.Button("⏭️", elem_id="tf-next-btn")
+                            tf_last_btn = gr.Button("⏭️", elem_id="tf-last-btn")
 
-            # 右侧：对话
-            with gr.Column(scale=3):
-                gr.Markdown("### 智能对话")
-
-                with gr.Row():
-                    provider = gr.Dropdown(
-                        choices=["deepseek", "anthropic", "openai"],
-                        value=settings.llm_provider,
-                        label="LLM 提供商"
-                    )
-                    api_key = gr.Textbox(
-                        label="API Key",
-                        type="password",
-                        placeholder="可选"
-                    )
-
-                chatbot = gr.Chatbot(label="对话", height=500)
-                user_input = gr.Textbox(label="输入问题", placeholder="例如：这个地图里有什么？", lines=2)
-
-                with gr.Row():
-                    send_btn = gr.Button("发送", variant="primary")
-                    clear_btn = gr.Button("清空")
+                        tf_frame_slider = gr.Slider(
+                            minimum=0, maximum=100, value=0, step=1,
+                            label="帧选择"
+                        )
+                        tf_frame_info = gr.Textbox(label="帧信息", interactive=False)
 
         # 事件
         def update_map(cx, cy, z, sl, sc):
@@ -696,6 +990,89 @@ def create_ui():
 
         clear_btn.click(fn=ui.clear_history, outputs=[chatbot, pos_status])
         stats_btn.click(fn=ui.get_map_stats, outputs=stats_output)
+
+        # ========== 交通流重建事件 ==========
+
+        def do_reconstruct(path, start, end):
+            result, msg = ui.reconstruct_traffic_flow(path, int(start), int(end))
+            if result:
+                total = ui.traffic_flow_visualizer.get_frame_count()
+                fig, _, _ = ui.get_traffic_flow_frame(0, False, True)
+                summary = ui.get_traffic_flow_summary_text()
+                return fig, msg, summary, gr.update(maximum=total-1, value=0), f"帧 0 / {total-1}"
+            return None, msg, "", gr.update(), ""
+
+        def on_slider_change(idx, show_traj, show_ids):
+            fig, new_idx, max_idx = ui.get_traffic_flow_frame(int(idx), show_traj, show_ids)
+            return fig, f"帧 {new_idx} / {max_idx}"
+
+        def on_first(show_traj, show_ids):
+            fig, idx, max_idx = ui.traffic_flow_first_frame(show_traj, show_ids)
+            return fig, idx, f"帧 {idx} / {max_idx}"
+
+        def on_prev(idx, show_traj, show_ids):
+            fig, new_idx, max_idx = ui.traffic_flow_prev_frame(int(idx), show_traj, show_ids)
+            return fig, new_idx, f"帧 {new_idx} / {max_idx}"
+
+        def on_next(idx, show_traj, show_ids):
+            fig, new_idx, max_idx = ui.traffic_flow_next_frame(int(idx), show_traj, show_ids)
+            return fig, new_idx, f"帧 {new_idx} / {max_idx}"
+
+        def on_last(show_traj, show_ids):
+            fig, idx, max_idx = ui.traffic_flow_last_frame(show_traj, show_ids)
+            return fig, idx, f"帧 {idx} / {max_idx}"
+
+        # 重建按钮
+        tf_reconstruct_btn.click(
+            fn=do_reconstruct,
+            inputs=[tf_detection_path, tf_start_frame, tf_end_frame],
+            outputs=[tf_plot, tf_status, tf_summary, tf_frame_slider, tf_frame_info]
+        )
+
+        # 帧滑块
+        tf_frame_slider.change(
+            fn=on_slider_change,
+            inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids],
+            outputs=[tf_plot, tf_frame_info]
+        )
+
+        # 播放控制按钮
+        tf_first_btn.click(
+            fn=on_first,
+            inputs=[tf_show_trajectories, tf_show_ids],
+            outputs=[tf_plot, tf_frame_slider, tf_frame_info]
+        )
+
+        tf_prev_btn.click(
+            fn=on_prev,
+            inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids],
+            outputs=[tf_plot, tf_frame_slider, tf_frame_info]
+        )
+
+        tf_next_btn.click(
+            fn=on_next,
+            inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids],
+            outputs=[tf_plot, tf_frame_slider, tf_frame_info]
+        )
+
+        tf_last_btn.click(
+            fn=on_last,
+            inputs=[tf_show_trajectories, tf_show_ids],
+            outputs=[tf_plot, tf_frame_slider, tf_frame_info]
+        )
+
+        # 显示选项变化时更新
+        tf_show_trajectories.change(
+            fn=on_slider_change,
+            inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids],
+            outputs=[tf_plot, tf_frame_info]
+        )
+
+        tf_show_ids.change(
+            fn=on_slider_change,
+            inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids],
+            outputs=[tf_plot, tf_frame_info]
+        )
 
     return demo
 

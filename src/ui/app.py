@@ -19,6 +19,7 @@ sys.path.insert(0, str(project_root / "src"))
 import gradio as gr
 import plotly.graph_objects as go
 import numpy as np
+import pandas  # 显式导入 pandas，避免 plotly 中的循环导入问题
 
 from apis.map_api import MapAPI
 from agents.master import MasterAgent, create_master_agent
@@ -76,7 +77,7 @@ class TrafficFlowVisualizer:
 
         if not self._frames or frame_idx >= len(self._frames):
             fig = go.Figure()
-            fig.add_annotation(text="无数据", x=0.5, y=0.5, showarrow=False)
+            fig.add_annotation(text="无数据", x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False)
             return fig
 
         frame = self._frames[frame_idx]
@@ -287,14 +288,12 @@ class FastMapVisualizer:
                 segs_x, segs_y = clip_to_view(lane_data['x'], lane_data['y'])
                 if segs_x:
                     for sx, sy in zip(segs_x, segs_y):
-                        # 每个车道线段都添加悬停信息和可点击性
                         fig.add_trace(go.Scatter(
                             x=sx, y=sy,
                             mode='lines',
                             line=dict(color=lane_data['color'], width=3),
                             showlegend=False,
-                            hovertemplate='<b>点击选择此位置</b><br>x=%{x:.1f}<br>y=%{y:.1f}<extra></extra>',
-                            name=f'lane_{lane_id}'
+                            hoverinfo='skip'
                         ))
 
         # 绘制中心线
@@ -454,7 +453,7 @@ class MapAgentUI:
     def render_map(self, center_x, center_y, zoom, show_lanes, show_centerlines):
         if not self.visualizer:
             fig = go.Figure()
-            fig.add_annotation(text="加载中...", x=0.5, y=0.5, showarrow=False)
+            fig.add_annotation(text="加载中...", x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False)
             return fig
 
         center_x = None if center_x == "" or center_x is None else float(center_x)
@@ -605,7 +604,7 @@ class MapAgentUI:
         """获取交通流帧可视化"""
         if not self.traffic_flow_result:
             fig = go.Figure()
-            fig.add_annotation(text="请先执行交通流重建", x=0.5, y=0.5, showarrow=False)
+            fig.add_annotation(text="请先执行交通流重建", x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False)
             return fig, 0, 0
 
         self.traffic_flow_visualizer.set_current_frame(frame_idx)
@@ -655,6 +654,18 @@ def create_ui():
 
     # CSS 样式 - 默认普通光标，选点模式时十字光标
     css = """
+    /* 隐藏配置元素但保留在 DOM 中 */
+    .hide-elem {
+        position: absolute !important;
+        width: 0 !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        pointer-events: none !important;
+    }
+    .hide-elem .block-wrap {
+        display: none !important;
+    }
+
     /* 默认地图光标 */
     .js-plotly-plot { cursor: grab !important; }
     .js-plotly-plot * { cursor: grab !important; }
@@ -683,9 +694,10 @@ def create_ui():
     with gr.Blocks(title="MapAgent", css=css) as demo:
         gr.Markdown("# 🗺️ MapAgent - 地图问答系统")
 
-        # 隐藏的输入框接收点击坐标和模式
-        click_coords = gr.Textbox(elem_id="click-coords", visible=False)
-        click_mode_state = gr.Textbox(value="", elem_id="click-mode", visible=False)
+        # 隐藏的输入框接收点击坐标和模式（使用 visible=True 但高度为 0 的方式隐藏）
+        with gr.Group(elem_classes="hide-elem"):
+            click_coords = gr.Textbox(elem_id="click-coords", label="点击坐标")
+            click_mode_state = gr.Textbox(value="", elem_id="click-mode", label="点击模式")
 
         # JavaScript 用于处理选点模式
         js_html = """
@@ -713,6 +725,43 @@ def create_ui():
                 document.body.classList.remove('mode-start', 'mode-end');
             };
 
+            // 获取隐藏输入框的值
+            function getInputValue(elemId) {
+                var container = document.getElementById(elemId);
+                if (!container) return null;
+                var textarea = container.querySelector('textarea');
+                if (textarea) return textarea.value;
+                var input = container.querySelector('input');
+                if (input) return input.value;
+                return null;
+            }
+
+            // 设置隐藏输入框的值并触发更新
+            function setInputValue(elemId, value) {
+                var container = document.getElementById(elemId);
+                if (!container) {
+                    console.log('Container not found:', elemId);
+                    return;
+                }
+                var textarea = container.querySelector('textarea');
+                if (textarea) {
+                    textarea.value = value;
+                    textarea.dispatchEvent(new Event('input', {bubbles: true}));
+                    textarea.dispatchEvent(new Event('change', {bubbles: true}));
+                    console.log('Set textarea value:', elemId, '=', value);
+                    return;
+                }
+                var input = container.querySelector('input');
+                if (input) {
+                    input.value = value;
+                    input.dispatchEvent(new Event('input', {bubbles: true}));
+                    input.dispatchEvent(new Event('change', {bubbles: true}));
+                    console.log('Set input value:', elemId, '=', value);
+                    return;
+                }
+                console.log('No input/textarea found in:', elemId);
+            }
+
             // 绑定按钮点击
             function bindButtons() {
                 var startBtn = document.querySelector('#set-start-btn button');
@@ -720,12 +769,14 @@ def create_ui():
 
                 if (startBtn && !startBtn._bound) {
                     startBtn.addEventListener('click', function() {
+                        console.log('Start button clicked, entering start mode');
                         window.setSelectMode('start');
                     });
                     startBtn._bound = true;
                 }
                 if (endBtn && !endBtn._bound) {
                     endBtn.addEventListener('click', function() {
+                        console.log('End button clicked, entering end mode');
                         window.setSelectMode('end');
                     });
                     endBtn._bound = true;
@@ -740,28 +791,29 @@ def create_ui():
                     try {
                         p.on('plotly_click', function(e) {
                             console.log('Plot clicked, mode:', mode);
-                            if (!mode) return;
+                            if (!mode) {
+                                console.log('No mode set, ignoring click');
+                                return;
+                            }
 
                             var pt = e.points[0];
                             var x = pt.x.toFixed(2);
                             var y = pt.y.toFixed(2);
 
-                            var c = document.querySelector('#click-coords textarea');
-                            var m = document.querySelector('#click-mode textarea');
+                            console.log('Setting coords:', x + ',' + y, 'mode:', mode);
 
-                            if (c) {
-                                c.value = x + ',' + y;
-                                c.dispatchEvent(new Event('input', {bubbles:true}));
-                            }
-                            if (m) {
-                                m.value = mode === 'start' ? '设置起点' : '设置终点';
-                                m.dispatchEvent(new Event('input', {bubbles:true}));
-                            }
+                            // 设置坐标
+                            setInputValue('click-coords', x + ',' + y);
+                            // 设置模式
+                            setInputValue('click-mode', mode === 'start' ? '设置起点' : '设置终点');
 
                             window.exitSelectMode();
                         });
                         p._bound = true;
-                    } catch(err) {}
+                        console.log('Plotly click handler bound');
+                    } catch(err) {
+                        console.log('Error binding plotly click:', err);
+                    }
                 });
             }
 
@@ -773,7 +825,8 @@ def create_ui():
 
             setTimeout(init, 500);
             setTimeout(init, 1500);
-            setInterval(init, 1000);
+            setTimeout(init, 3000);
+            setInterval(init, 2000);
         })();
         </script>
         """
@@ -890,7 +943,9 @@ def create_ui():
         # 事件
         def update_map(cx, cy, z, sl, sc):
             if not ui.map_api:
-                map_path = Path("/data/DC/MapAgent/data/vector_map.json")
+                # 使用相对于项目根目录的路径
+                project_root = Path(__file__).parent.parent.parent
+                map_path = project_root / "data" / "vector_map.json"
                 ui.init_map(str(map_path))
 
             try:
@@ -902,6 +957,7 @@ def create_ui():
 
         def handle_click(coords_str, mode):
             """处理从 JavaScript 传来的点击坐标"""
+            print(f'handle_click called: coords_str={coords_str!r}, mode={mode!r}')
             if not coords_str or not mode:
                 return gr.update(), gr.update(), gr.update(), gr.update(), "请先点击按钮选择模式"
             try:
@@ -909,14 +965,20 @@ def create_ui():
                 x = float(parts[0])
                 y = float(parts[1])
 
+                print(f'Parsed coordinates: x={x}, y={y}, mode={mode}')
+
                 if mode == "设置起点":
-                    ui.start_position = (x, y, 0)
+                    ui.start_position = (x, y, 0)  # debug added
                     return x, y, gr.update(), gr.update(), f"起点已设置: ({x:.1f}, {y:.1f})"
                 elif mode == "设置终点":
-                    ui.end_position = (x, y, 0)
+                    ui.end_position = (x, y, 0)  # debug added
                     return gr.update(), gr.update(), x, y, f"终点已设置: ({x:.1f}, {y:.1f})"
+                else:
+                    print(f'Unknown mode: {mode}')
+                    return gr.update(), gr.update(), gr.update(), gr.update(), f"Unknown mode: {mode}"
             except Exception as e:
-                return gr.update(), gr.update(), gr.update(), gr.update(), f"错误: {e}"
+                print(f"handle_click error: {e}")
+                return gr.update(), gr.update(), gr.update(), gr.update(), f"Error: {e}"
 
         def clear_all_positions():
             """清空起点终点"""

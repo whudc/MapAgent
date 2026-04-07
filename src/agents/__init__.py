@@ -14,6 +14,7 @@ from agents.behavior import BehaviorAgent
 from agents.path import PathAgent
 from agents.traffic_flow import TrafficFlowAgent
 from agents.master import MasterAgent, create_master_agent
+from agents.deepsort_tracker import DeepSORTTracker
 
 __all__ = [
     "BaseAgent",
@@ -24,4 +25,5 @@ __all__ = [
     "TrafficFlowAgent",
     "MasterAgent",
     "create_master_agent",
+    "DeepSORTTracker",
 ]

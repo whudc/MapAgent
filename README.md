@@ -20,6 +20,7 @@ MapAgent/
 │   │   ├── scene.py             # 场景理解 Agent
 │   │   ├── behavior.py          # 行为分析 Agent
 │   │   ├── path.py              # 路径规划 Agent
+│   │   ├── traffic_flow.py      # 交通流重建 Agent (DeepSORT)
 │   │   └── master.py            # 主 Agent
 │   ├── apis/map_api.py          # 地图查询 API
 │   ├── core/                    # 核心模块
@@ -376,6 +377,91 @@ python tests/test_agents.py
 
 # 测试主 Agent
 python tests/test_master.py
+
+# 测试 DeepSORT 跟踪器
+python tests/test_deepsort.py
+
+# 测试交通流重建（带可视化）
+python tests/test_traffic_flow.py
+```
+
+## DeepSORT 跟踪器
+
+### 概述
+
+DeepSORT 是一个多目标跟踪算法，基于官方 [deep_sort](https://github.com/nwojke/deep_sort) 实现，针对 3D 位置跟踪进行了优化。
+
+本实现简化了原始 DeepSORT，仅使用位置信息进行跟踪，适用于交通流重建场景。
+
+### 主要特性
+
+- **6D 卡尔曼滤波**：状态向量 [x, y, z, vx, vy, vz]，相对不确定性模型
+- **马氏距离门控**：基于卡方分布的统计门控（阈值 7.81 for 3D）
+- **级联匹配**：按 time_since_update 分层匹配，优先匹配最近的轨迹
+- **位置距离匹配**：使用欧氏距离代替 IoU（更适合点检测）
+
+### 使用方法
+
+```python
+from agents.deepsort_tracker import DeepSORTTracker
+
+# 创建跟踪器
+tracker = DeepSORTTracker(
+    max_distance=5.0,         # 最大匹配距离（米）
+    max_velocity=30.0,        # 最大速度（米/秒）
+    frame_interval=0.1,       # 帧间隔（秒）
+    min_hits=2,               # 确认轨迹需要的连续匹配次数
+    max_misses=30,            # 最大丢失帧数
+)
+
+# 更新跟踪
+for frame_id, detections in enumerate(frames):
+    # detections: List[Dict] with 'location', 'velocity', 'type', 'heading', 'speed'
+    tracks = tracker.update(detections, frame_id)
+    
+    # tracks: Dict[int, TrackedObject]
+    for track_id, track in tracks.items():
+        print(f"Track {track_id}: {track.last_position}")
+```
+
+### 参数说明
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `max_distance` | 5.0 | 马氏距离/位置距离最大阈值（米） |
+| `max_velocity` | 30.0 | 最大速度阈值（米/秒） |
+| `frame_interval` | 0.1 | 帧间隔时间（秒） |
+| `min_hits` | 2 | 确认轨迹需要的连续匹配次数 |
+| `max_misses` | 30 | 轨迹最大丢失帧数 |
+| `max_iou_distance` | 5.0 | 二级匹配最大距离（米） |
+
+### 交通流重建 Agent
+
+```python
+from agents.traffic_flow import TrafficFlowAgent
+from agents.base import AgentContext
+from utils.detection_loader import DetectionLoader
+
+# 创建 Agent
+context = AgentContext()
+agent = TrafficFlowAgent(context)
+
+# 加载检测结果
+agent._load_detection_results("data/json_results")
+
+# 重建交通流
+result = agent._reconstruct_traffic_flow(
+    start_frame=0,
+    end_frame=100,
+    max_distance=5.0,
+    max_velocity=30.0,
+)
+
+# 获取轨迹
+trajectory = agent._get_trajectory_by_id(vehicle_id=1)
+
+# 保存结果
+agent._save_reconstruction_result("output.json")
 ```
 
 ## 示例对话

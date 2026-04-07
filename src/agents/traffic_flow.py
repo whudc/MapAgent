@@ -476,6 +476,53 @@ class TrafficFlowAgent(BaseAgent):
 3. 使用 get_trajectory_by_id 查询特定轨迹
 4. 使用 save_reconstruction_result 保存结果"""
 
+    def process(self, query: str, **kwargs) -> Dict[str, Any]:
+        """
+        处理查询
+
+        Args:
+            query: 用户查询
+            **kwargs: 额外参数（detection_path, start_frame, end_frame 等）
+
+        Returns:
+            处理结果
+        """
+        # 解析参数
+        detection_path = kwargs.get('detection_path')
+        start_frame = kwargs.get('start_frame')
+        end_frame = kwargs.get('end_frame')
+        output_path = kwargs.get('output_path', 'reconstruction_result.json')
+
+        # 如果提供了检测结果路径，先加载
+        if detection_path:
+            load_result = self._load_detection_results(detection_path)
+            if not load_result.get('success'):
+                return load_result
+
+        # 执行重建
+        if self._loader:
+            recon_result = self._reconstruct_traffic_flow(
+                start_frame=start_frame,
+                end_frame=end_frame
+            )
+            if not recon_result.get('success'):
+                return recon_result
+
+            # 保存结果
+            save_result = self._save_reconstruction_result(output_path)
+
+            return {
+                "success": True,
+                "message": "交通流重建完成",
+                "reconstruction": recon_result,
+                "saved_to": save_result.get('path'),
+            }
+
+        return {
+            "success": False,
+            "error": "请提供检测结果路径 (detection_path)",
+        }
+
     # ==================== 工具实现 ====================
 
     def _load_detection_results(self, path: str) -> Dict[str, Any]:

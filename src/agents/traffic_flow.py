@@ -476,17 +476,18 @@ class TrafficFlowAgent(BaseAgent):
 3. 使用 get_trajectory_by_id 查询特定轨迹
 4. 使用 save_reconstruction_result 保存结果"""
 
-    def process(self, _query: str, **kwargs) -> Dict[str, Any]:
+    def process(self, query: str, **kwargs) -> Dict[str, Any]:
         """
         处理查询
 
         Args:
-            query: 用户查询
+            query: 用户查询（当前未使用，保留以匹配接口）
             **kwargs: 额外参数（detection_path, start_frame, end_frame 等）
 
         Returns:
             处理结果
         """
+        _ = query  # 参数保留以匹配接口，暂未使用
         # 解析参数
         detection_path = kwargs.get('detection_path')
         start_frame = kwargs.get('start_frame')

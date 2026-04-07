@@ -250,7 +250,8 @@ class MasterAgent:
                     "properties": {
                         "start_frame": {"type": "integer", "description": "起始帧ID"},
                         "end_frame": {"type": "integer", "description": "结束帧ID"},
-                        "use_llm": {"type": "boolean", "description": "是否使用LLM补充推理"}
+                        "max_distance": {"type": "number", "description": "最大匹配距离(米)", "default": 5.0},
+                        "max_velocity": {"type": "number", "description": "最大速度(m/s)", "default": 30.0}
                     }
                 }
             },
@@ -287,7 +288,7 @@ class MasterAgent:
 
     def _execute_tool(self, name: str, args: Dict) -> Any:
         """执行工具调用"""
-        # 懒加载 TrafficFlowAgent
+        # 懒加载 TrafficFlowAgent（支持 LLM 增强模式）
         if name in ["load_detection_results", "reconstruct_traffic_flow",
                     "get_trajectory_by_id", "save_reconstruction_result",
                     "get_traffic_flow_summary", "analyze_vehicle_behavior"]:
@@ -295,7 +296,9 @@ class MasterAgent:
                 from agents.base import AgentContext
                 from agents.traffic_flow import TrafficFlowAgent
                 context = AgentContext(map_api=self.map_api, llm_client=self.llm_client)
-                self._traffic_flow_agent = TrafficFlowAgent(context)
+                # 根据是否配置 LLM 客户端决定是否启用 LLM 优化
+                use_llm = self.llm_client is not None
+                self._traffic_flow_agent = TrafficFlowAgent(context, use_llm=use_llm)
 
         try:
             if name == "get_lane_info":
@@ -337,7 +340,8 @@ class MasterAgent:
                 return self._traffic_flow_agent._reconstruct_traffic_flow(
                     args.get("start_frame"),
                     args.get("end_frame"),
-                    args.get("use_llm", True)
+                    max_distance=args.get("max_distance", 5.0),
+                    max_velocity=args.get("max_velocity", 30.0),
                 )
             elif name == "get_trajectory_by_id":
                 return self._traffic_flow_agent._get_trajectory_by_id(args["vehicle_id"])

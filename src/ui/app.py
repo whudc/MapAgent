@@ -436,7 +436,16 @@ class MapAgentUI:
         self.map_api = MapAPI(map_file=map_file)
         self.visualizer = FastMapVisualizer(self.map_api)
 
-    def init_agent(self, provider: str, api_key: str = None):
+    def init_agent(self, provider: str, api_key: str = None, port: int = None, gguf_file: str = None):
+        """初始化 Agent
+
+        Args:
+            provider: LLM 提供商
+            api_key: API Key（本地模型不需要）
+            port: 本地模型服务端口
+            gguf_file: Gemma4 GGUF 模型文件名
+        """
+        # 设置环境变量
         if api_key:
             if provider == "deepseek":
                 os.environ["DEEPSEEK_API_KEY"] = api_key
@@ -444,6 +453,20 @@ class MapAgentUI:
                 os.environ["ANTHROPIC_API_KEY"] = api_key
             elif provider == "openai":
                 os.environ["OPENAI_API_KEY"] = api_key
+
+        # 本地模型配置
+        if provider in ["qwen_local", "qwen"]:
+            port = port or 8000
+            os.environ["QWEN_BASE_URL"] = f"http://localhost:{port}/v1"
+            os.environ["LLM_PROVIDER"] = "qwen_local"
+            api_key = "dummy"  # 本地模型不需要真实 API key
+        elif provider in ["gemma4_local", "gemma4"]:
+            port = port or 8001
+            gguf_file = gguf_file or "gemma-4-31B-it-Q4_K_M.gguf"
+            os.environ["GEMMA4_BASE_URL"] = f"http://localhost:{port}/v1"
+            os.environ["LLM_PROVIDER"] = "gemma4_local"
+            os.environ["LLM_MODEL"] = gguf_file.replace(".gguf", "")
+            api_key = "dummy"
 
         self.agent = create_master_agent(
             map_file=str(settings.map_path),
@@ -500,13 +523,27 @@ class MapAgentUI:
         self.current_position = (x, y, 0)
         return f"已设置位置: ({x:.1f}, {y:.1f})"
 
-    def chat(self, message: str, provider: str, api_key: str, history: list):
+    def chat(self, message: str, provider: str, api_key: str, history: list,
+                 port: int = None, gguf_file: str = None):
         if not message.strip():
             return history, ""
 
-        if not self.agent or (api_key and api_key != getattr(self, '_last_api_key', None)):
-            self.init_agent(provider, api_key)
+        # 检查是否需要重新初始化 Agent
+        need_reinit = False
+        if not self.agent:
+            need_reinit = True
+        elif provider in ["qwen_local", "gemma4_local"] and port != getattr(self, '_last_port', None):
+            need_reinit = True
+        elif gguf_file and gguf_file != getattr(self, '_last_gguf', None):
+            need_reinit = True
+        elif api_key and api_key != getattr(self, '_last_api_key', None):
+            need_reinit = True
+
+        if need_reinit:
+            self.init_agent(provider, api_key, port, gguf_file)
             self._last_api_key = api_key
+            self._last_port = port
+            self._last_gguf = gguf_file
 
         history = history or []
         history.append({"role": "user", "content": message})
@@ -824,14 +861,34 @@ def create_ui():
 
                         with gr.Row():
                             provider = gr.Dropdown(
-                                choices=["deepseek", "anthropic", "openai"],
+                                choices=["deepseek", "anthropic", "openai", "qwen_local", "gemma4_local"],
                                 value=settings.llm_provider,
                                 label="LLM 提供商"
                             )
                             api_key = gr.Textbox(
                                 label="API Key",
                                 type="password",
-                                placeholder="可选"
+                                placeholder="本地模型无需API Key"
+                            )
+
+                        # 本地模型配置（仅当选择本地模型时显示）
+                        with gr.Row(visible=False) as local_model_config:
+                            local_port = gr.Number(
+                                label="服务端口",
+                                value=8000 if settings.llm_provider in ["qwen", "qwen_local"] else 8001,
+                                precision=0
+                            )
+                            gguf_select = gr.Dropdown(
+                                label="GGUF模型文件（Gemma4）",
+                                choices=[
+                                    "gemma-4-31B-it-Q4_K_M.gguf",
+                                    "gemma-4-31B-it-Q4_0.gguf",
+                                    "gemma-4-31B-it-Q5_K_S.gguf",
+                                    "gemma-4-31B-it-Q6_K.gguf",
+                                    "gemma-4-31B-it-Q8_0.gguf",
+                                ],
+                                value="gemma-4-31B-it-Q4_K_M.gguf",
+                                visible=False
                             )
 
                         chatbot = gr.Chatbot(label="对话", height=500)
@@ -931,6 +988,21 @@ def create_ui():
             outputs=map_plot
         )
 
+        # Provider 选择变化 - 显示/隐藏本地模型配置
+        def on_provider_change(provider_val):
+            if provider_val in ["qwen_local", "qwen"]:
+                return gr.update(visible=True), gr.update(value=8000), gr.update(visible=False)
+            elif provider_val in ["gemma4_local", "gemma4"]:
+                return gr.update(visible=True), gr.update(value=8001), gr.update(visible=True)
+            else:
+                return gr.update(visible=False), gr.update(), gr.update(visible=False)
+
+        provider.change(
+            fn=on_provider_change,
+            inputs=[provider],
+            outputs=[local_model_config, local_port, gguf_select]
+        )
+
         show_lanes.change(fn=update_map, inputs=[center_x, center_y, zoom, show_lanes, show_centerlines], outputs=map_plot)
         show_centerlines.change(fn=update_map, inputs=[center_x, center_y, zoom, show_lanes, show_centerlines], outputs=map_plot)
 
@@ -970,7 +1042,7 @@ def create_ui():
         # 发送消息后更新地图（显示路径）
         send_btn.click(
             fn=ui.chat,
-            inputs=[user_input, provider, api_key, chatbot],
+            inputs=[user_input, provider, api_key, chatbot, local_port, gguf_select],
             outputs=[chatbot, user_input]
         ).then(
             fn=update_map,
@@ -980,7 +1052,7 @@ def create_ui():
 
         user_input.submit(
             fn=ui.chat,
-            inputs=[user_input, provider, api_key, chatbot],
+            inputs=[user_input, provider, api_key, chatbot, local_port, gguf_select],
             outputs=[chatbot, user_input]
         ).then(
             fn=update_map,

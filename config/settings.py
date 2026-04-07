@@ -28,8 +28,17 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 4096
     llm_temperature: float = 0.7
 
+    # 本地模型配置
+    local_model_type: str = "qwen"  # qwen 或 gemma4
+    local_model_path: Optional[str] = None  # 本地模型路径
+    local_model_base_url: str = "http://localhost:8000/v1"  # vLLM/llama.cpp 服务地址
+    local_model_port: int = 8000  # 服务端口
+
     # 日志配置
     log_level: str = "INFO"
+
+    # 项目根目录
+    project_root: Path = Path(__file__).parent.parent
 
     class Config:
         env_file = ".env"
@@ -41,9 +50,31 @@ class Settings(BaseSettings):
         path = Path(self.map_file)
         if not path.is_absolute():
             # 相对路径，相对于项目根目录
-            root = Path(__file__).parent.parent  # config -> MapAgent
-            path = root / path
+            path = self.project_root / path
         return path
+
+    def get_local_model_config(self) -> dict:
+        """获取本地模型配置"""
+        configs = {
+            "qwen": {
+                "model_name": "Qwen3___5-35B-A3B",
+                "model_path": str(self.project_root / "model" / "Qwen" / "Qwen3___5-35B-A3B"),
+                "default_port": 8000,
+            },
+            "gemma4": {
+                "model_name": "gemma-4-31B-it",
+                "model_path": str(self.project_root / "model" / "gemma4"),
+                "default_port": 8001,
+                # GGUF 模型文件列表
+                "gguf_models": [
+                    "gemma-4-31B-it-Q4_K_M.gguf",
+                    "gemma-4-31B-it-Q4_0.gguf",
+                    "gemma-4-31B-it-Q5_K_S.gguf",
+                    "gemma-4-31B-it-Q6_K.gguf",
+                ],
+            }
+        }
+        return configs.get(self.local_model_type, configs["qwen"])
 
 
 # 全局配置实例

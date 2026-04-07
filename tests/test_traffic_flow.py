@@ -6,63 +6,165 @@
 
 import sys
 import json
-import math
 from pathlib import Path
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+from typing import Dict, List, Optional
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "src"))
 
-from agents.traffic_flow import TrafficFlowAgent, reconstruct_traffic_flow
-from agents.deepsort_tracker import DeepSORTTracker
+from agents.traffic_flow import reconstruct_traffic_flow
 from utils.detection_loader import DetectionLoader
+from apis.map_api import MapAPI
 
 
-def transform_point(point, matrix):
-    """将点从自车坐标系转换到世界坐标系"""
-    homo_point = np.array([point[0], point[1], point[2], 1.0])
-    transformed = matrix @ homo_point
-    return transformed[:3].tolist()
+def get_vehicle_color(obj_type: str) -> str:
+    """根据车辆类型返回颜色"""
+    colors = {
+        'Vehicle': 'blue',
+        'Bus': 'orange',
+        'Truck': 'red',
+        'Pedestrian': 'green',
+        'Cyclist': 'purple',
+        'Unknown': 'gray',
+    }
+    return colors.get(obj_type, 'gray')
 
 
-def load_ground_truth(gt_dir: Path, num_frames: int = 50):
-    """加载真值数据并转换坐标系"""
-    gt_files = sorted(gt_dir.glob('*.json'))[:num_frames]
+def get_lane_color(line_color: str) -> str:
+    """根据车道线颜色返回 matplotlib 颜色"""
+    colors = {
+        'yellow': 'gold',
+        'white': 'gray',
+        'unknown': 'lightgray',
+    }
+    return colors.get(line_color.lower(), 'lightgray')
 
-    frames = []
-    gt_tracks = {}
 
-    for gt_file in gt_files:
-        frame_id = int(gt_file.stem)
-        with open(gt_file, 'r', encoding='utf-8') as f:
-            gt = json.load(f)
+def get_lane_style(lane_type: str) -> tuple:
+    """根据车道线类型返回线型"""
+    styles = {
+        'solid': ('-', 2),
+        'dashed': ('--', 2),
+        'double_solid': ('-', 3),
+        'double_dashed': ('--', 3),
+        'curb': ('-', 4),
+        'fence': ('-', 4),
+        'no_lane': (':', 1),
+    }
+    return styles.get(lane_type.lower(), ('-', 2))
 
-        matrix = np.array(gt['ego2global_transformation_matrix']).reshape(4, 4)
 
-        objects = []
-        for obj in gt.get('objects', []):
-            global_loc = transform_point(obj['location'], matrix)
-            objects.append({
-                'id': obj['id'],
-                'location': global_loc,
-                'type': obj['type'],
-            })
+def draw_map(ax, map_api: Optional[MapAPI], x_range: tuple = None, y_range: tuple = None):
+    """绘制地图（仅车道边界）"""
+    if map_api is None:
+        return
 
-            gt_id = obj['id']
-            if gt_id not in gt_tracks:
-                gt_tracks[gt_id] = []
-            gt_tracks[gt_id].append((frame_id, global_loc))
+    all_x = []
+    all_y = []
 
-        frames.append({
-            'frame_id': frame_id,
-            'objects': objects,
-        })
+    for lane_id, lane in map_api.map.lane_lines.items():
+        coords = lane.coordinates
+        if not coords:
+            continue
 
-    return frames, gt_tracks
+        x_vals = [c[0] for c in coords]
+        y_vals = [c[1] for c in coords]
+        all_x.extend(x_vals)
+        all_y.extend(y_vals)
+
+        color = get_lane_color(lane.color)
+        linestyle, linewidth = get_lane_style(lane.type)
+
+        ax.plot(x_vals, y_vals, linestyle, color=color, linewidth=linewidth, alpha=0.8)
+
+    if x_range and y_range:
+        ax.set_xlim(x_range)
+        ax.set_ylim(y_range)
+    elif all_x and all_y:
+        margin = 20
+        x_min, x_max = min(all_x) - margin, max(all_x) + margin
+        y_min, y_max = min(all_y) - margin, max(all_y) + margin
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(y_min, y_max)
+
+
+def draw_trajectories(ax, trajectories: Dict, map_api: Optional[MapAPI],
+                     title: str = "", min_length: int = 5,
+                     x_range: tuple = None, y_range: tuple = None):
+    """
+    绘制轨迹和地图
+
+    Args:
+        ax: matplotlib 轴
+        trajectories: 轨迹字典 {track_id: trajectory_data}
+        map_api: 地图 API
+        title: 标题
+        min_length: 最小轨迹长度
+        x_range: X 轴范围
+        y_range: Y 轴范围
+    """
+    ax.clear()
+    ax.set_title(title, fontsize=12, fontweight='bold')
+    ax.set_xlabel('X (m)')
+    ax.set_ylabel('Y (m)')
+    ax.grid(True, alpha=0.3)
+
+    # 先绘制地图
+    draw_map(ax, map_api, x_range, y_range)
+
+    if not trajectories:
+        ax.text(0, 0, 'No trajectories', ha='center', va='center', fontsize=14)
+        return
+
+    all_x = []
+    all_y = []
+    colors = plt.cm.tab20(np.linspace(0, 1, len(trajectories)))
+
+    for idx, (track_id, traj) in enumerate(trajectories.items()):
+        positions = traj.get('positions', [])
+        if len(positions) < min_length:
+            continue
+
+        xs = [p[0] for p in positions]
+        ys = [p[1] for p in positions]
+        all_x.extend(xs)
+        all_y.extend(ys)
+
+        color = colors[idx % len(colors)]
+
+        # 绘制轨迹线
+        ax.plot(xs, ys, color=color, linewidth=2, alpha=0.8, label=f'#{track_id}')
+
+        # 绘制起点和终点
+        ax.scatter(xs[0], ys[0], c=[color], s=80, marker='o', zorder=5,
+                  edgecolors='white', linewidth=1.5, label='_nolegend_')
+        ax.scatter(xs[-1], ys[-1], c=[color], s=80, marker='x', zorder=5,
+                  linewidth=2, label='_nolegend_')
+
+    # 添加图例说明
+    if trajectories:
+        from matplotlib.lines import Line2D
+        legend_elements = [
+            Line2D([0], [0], marker='o', color='w', markerfacecolor='blue',
+                  markersize=8, label='Start'),
+            Line2D([0], [0], marker='x', color='w', markerfacecolor='red',
+                  markersize=8, label='End'),
+        ]
+        ax.legend(handles=legend_elements, loc='upper right', fontsize=9)
+
+    # 设置坐标范围
+    if all_x and all_y and not x_range:
+        margin = 15
+        x_min, x_max = min(all_x) - margin, max(all_x) + margin
+        y_min, y_max = min(all_y) - margin, max(all_y) + margin
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(y_min, y_max)
 
 
 def load_model_detections(detection_dir: str, num_frames: int = 50):
@@ -88,230 +190,52 @@ def load_model_detections(detection_dir: str, num_frames: int = 50):
     return frames
 
 
-def find_best_matching_gt_track(pred_positions, gt_tracks, max_distance=15.0):
-    """找到与预测轨迹最匹配的真值轨迹（基于起点距离）"""
-    if not pred_positions or not gt_tracks:
-        return None, float('inf')
+def visualize_results(result: dict, map_api: Optional[MapAPI], output_dir: Path, min_length: int = 10):
+    """可视化所有轨迹（结合地图）"""
+    trajectories = result.get('trajectories', {})
 
-    pred_start = np.array(pred_positions[0][:2])
-    best_gt_id = None
-    best_distance = float('inf')
-
-    for gt_id, gt_pos_list in gt_tracks.items():
-        if len(gt_pos_list) < 3:
-            continue
-        gt_start = np.array(gt_pos_list[0][1][:2])
-        distance = np.linalg.norm(pred_start - gt_start)
-        if distance < best_distance:
-            best_distance = distance
-            best_gt_id = gt_id
-
-    if best_distance > max_distance:
-        return None, best_distance
-    return best_gt_id, best_distance
-
-
-def visualize_single_trajectory(
-    track_id, pred_traj, gt_track_id, gt_positions,
-    single_dir: Path, track_color='#FF4444', gt_color='#44AA44'
-):
-    """可视化单条轨迹与真值对比"""
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-
-    pred_positions = pred_traj.get('positions', [])
-    pred_frames = pred_traj.get('frame_ids', [])
-    pred_type = pred_traj.get('type', 'Unknown')
-    pred_length = pred_traj.get('length', 0)
-
-    if len(pred_positions) < 2:
-        plt.close()
-        return None
-
-    # ========== 子图 1: 轨迹对比 (XY 平面) ==========
-    ax1 = axes[0]
-
-    # 预测轨迹
-    pred_xs = [p[0] for p in pred_positions]
-    pred_ys = [p[1] for p in pred_positions]
-    ax1.plot(pred_xs, pred_ys, color=track_color, linewidth=3, label='Predicted', alpha=0.8)
-    ax1.scatter(pred_xs[0], pred_ys[0], c=track_color, s=150, marker='o',
-                zorder=5, edgecolors='white', linewidth=2, label='Pred Start')
-    ax1.scatter(pred_xs[-1], pred_ys[-1], c=track_color, s=150, marker='x',
-                zorder=5, linewidth=3, label='Pred End')
-
-    # 真值轨迹
-    if gt_positions:
-        gt_xs = [p[1][0] for p in gt_positions]
-        gt_ys = [p[1][1] for p in gt_positions]
-        ax1.plot(gt_xs, gt_ys, color=gt_color, linewidth=3, linestyle='--',
-                 label=f'GT (ID:{gt_track_id})', alpha=0.8)
-        ax1.scatter(gt_xs[0], gt_ys[0], c=gt_color, s=150, marker='o',
-                    zorder=5, edgecolors='white', linewidth=2, label='GT Start')
-        ax1.scatter(gt_xs[-1], gt_ys[-1], c=gt_color, s=150, marker='x',
-                    zorder=5, linewidth=3, label='GT End')
-
-    ax1.set_xlabel('X (m)', fontsize=12)
-    ax1.set_ylabel('Y (m)', fontsize=12)
-    ax1.set_title(f'Track ID: {track_id} | Length: {pred_length} frames\nType: {pred_type}', fontsize=12)
-    ax1.legend(loc='upper right', fontsize=10)
-    ax1.set_aspect('equal')
-    ax1.grid(True, alpha=0.3)
-
-    # ========== 子图 2: 坐标随时间变化 ==========
-    ax2 = axes[1]
-
-    pred_x_vals = [p[0] for p in pred_positions]
-    pred_y_vals = [p[1] for p in pred_positions]
-
-    ax2.plot(pred_frames, pred_x_vals, color=track_color, linewidth=2,
-             marker='o', markersize=5, label='Pred X', alpha=0.7)
-    ax2.plot(pred_frames, pred_y_vals, color=track_color, linewidth=2,
-             marker='s', markersize=5, label='Pred Y', alpha=0.5)
-
-    if gt_positions:
-        gt_frame_dict = {fp[0]: fp[1] for fp in gt_positions}
-        matched_frames = [fp[0] for fp in gt_positions]
-        gt_x_vals = [fp[1][0] for fp in gt_positions]
-        gt_y_vals = [fp[1][1] for fp in gt_positions]
-
-        ax2.plot(matched_frames, gt_x_vals, color=gt_color, linewidth=2,
-                 linestyle='--', marker='o', markersize=5, label='GT X', alpha=0.7)
-        ax2.plot(matched_frames, gt_y_vals, color=gt_color, linewidth=2,
-                 linestyle='--', marker='s', markersize=5, label='GT Y', alpha=0.5)
-
-    ax2.set_xlabel('Frame ID', fontsize=12)
-    ax2.set_ylabel('Position (m)', fontsize=12)
-    ax2.set_title(f'Position Over Time', fontsize=12)
-    ax2.legend(loc='best', fontsize=10)
-    ax2.grid(True, alpha=0.3)
-
+    # 汇总图（带地图）
+    fig, ax = plt.subplots(1, 1, figsize=(14, 12))
+    draw_trajectories(ax, trajectories, map_api,
+                     title=f'Traffic Flow Reconstruction ({len(trajectories)} tracks)',
+                     min_length=min_length)
     plt.tight_layout()
-
-    gt_suffix = f"_vs_GT{gt_track_id}" if gt_track_id else "_no_GT"
-    filename = f"track_{track_id:04d}{gt_suffix}.png"
-    output_path = single_dir / filename
-
+    output_path = output_dir / 'trajectories_overview_with_map.png'
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
-    plt.close()
-    return output_path
-
-
-def visualize_comparison(gt_tracks, result_no_map, result_with_map, output_dir: Path):
-    """可视化对比三种结果"""
-    fig, axes = plt.subplots(1, 3, figsize=(24, 8))
-
-    # Ground truth
-    ax1 = axes[0]
-    colors = plt.cm.tab20(np.linspace(0, 1, len(gt_tracks)))
-
-    for idx, (gt_id, positions) in enumerate(gt_tracks.items()):
-        if len(positions) < 5:
-            continue
-        xs = [p[1][0] for p in positions]
-        ys = [p[1][1] for p in positions]
-        ax1.plot(xs, ys, color=colors[idx % len(colors)], linewidth=2, alpha=0.8)
-        ax1.scatter(xs[0], ys[0], c=[colors[idx % len(colors)]], s=80, marker='o', zorder=5)
-        ax1.scatter(xs[-1], ys[-1], c=[colors[idx % len(colors)]], s=80, marker='x', zorder=5)
-
-    ax1.set_xlabel('X (m)')
-    ax1.set_ylabel('Y (m)')
-    ax1.set_title(f'Ground Truth ({len(gt_tracks)} tracks)')
-    ax1.set_aspect('equal')
-    ax1.grid(True, alpha=0.3)
-
-    # max_distance=3.0
-    ax2 = axes[1]
-    trajectories = result_no_map.get('trajectories', {})
-    colors = plt.cm.tab20(np.linspace(0, 1, len(trajectories)))
-
-    for idx, (track_id, traj) in enumerate(trajectories.items()):
-        positions = traj['positions']
-        if len(positions) < 5:
-            continue
-        xs = [p[0] for p in positions]
-        ys = [p[1] for p in positions]
-        ax2.plot(xs, ys, color=colors[idx % len(colors)], linewidth=2, alpha=0.8)
-        ax2.scatter(xs[0], ys[0], c=[colors[idx % len(colors)]], s=80, marker='o', zorder=5)
-        ax2.scatter(xs[-1], ys[-1], c=[colors[idx % len(colors)]], s=80, marker='x', zorder=5)
-
-    ax2.set_xlabel('X (m)')
-    ax2.set_ylabel('Y (m)')
-    ax2.set_title(f'max_distance=3.0 ({len(trajectories)} tracks)')
-    ax2.set_aspect('equal')
-    ax2.grid(True, alpha=0.3)
-
-    # max_distance=5.0
-    ax3 = axes[2]
-    trajectories = result_with_map.get('trajectories', {})
-    colors = plt.cm.tab20(np.linspace(0, 1, len(trajectories)))
-
-    for idx, (track_id, traj) in enumerate(trajectories.items()):
-        positions = traj['positions']
-        if len(positions) < 5:
-            continue
-        xs = [p[0] for p in positions]
-        ys = [p[1] for p in positions]
-
-        ax3.plot(xs, ys, color=colors[idx % len(colors)], linewidth=2, alpha=0.8)
-        ax3.scatter(xs[0], ys[0], c=[colors[idx % len(colors)]], s=80, marker='o', zorder=5)
-        ax3.scatter(xs[-1], ys[-1], c=[colors[idx % len(colors)]], s=80, marker='x', zorder=5)
-
-    ax3.set_xlabel('X (m)')
-    ax3.set_ylabel('Y (m)')
-    ax3.set_title(f'max_distance=5.0 ({len(trajectories)} tracks)')
-    ax3.set_aspect('equal')
-    ax3.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    output_path = output_dir / 'trajectory_comparison.png'
-    plt.savefig(output_path, dpi=150)
-    print(f"Saved: {output_path}")
+    print(f"Saved overview with map: {output_path}")
     plt.close()
 
-
-def visualize_all_single_trajectories(gt_tracks, result_with_map, output_dir: Path, min_length: int = 10):
-    """为所有轨迹生成单独的可视化对比图"""
-    trajectories = result_with_map.get('trajectories', {})
-
+    # 单条轨迹图（带地图）
     single_dir = output_dir / "single_trajectories"
     single_dir.mkdir(exist_ok=True)
 
-    stats = {'total': len(trajectories), 'with_gt': 0, 'without_gt': 0, 'long': 0}
-
-    print(f"\nGenerating single trajectory visualizations...")
-
+    print(f"\nGenerating single trajectory visualizations with map...")
+    count = 0
     for track_id, traj in trajectories.items():
         if traj['length'] < min_length:
             continue
 
-        if traj['length'] >= 20:
-            stats['long'] += 1
+        fig, ax = plt.subplots(1, 1, figsize=(12, 10))
+        single_traj = {track_id: traj}
+        draw_trajectories(ax, single_traj, map_api,
+                         title=f'Track ID: {track_id} | Length: {traj["length"]} frames | Type: {traj.get("type", "Unknown")}',
+                         min_length=1)
+        plt.tight_layout()
 
-        # 寻找匹配的真值轨迹
-        gt_match, match_dist = find_best_matching_gt_track(traj['positions'], gt_tracks, max_distance=15.0)
+        output_path = single_dir / f"track_{track_id:04d}.png"
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        plt.close()
 
-        if gt_match:
-            stats['with_gt'] += 1
-            gt_positions = gt_tracks[gt_match]
-        else:
-            stats['without_gt'] += 1
-            gt_positions = None
-
-        # 生成可视化
-        output_path = visualize_single_trajectory(
-            track_id=track_id,
-            pred_traj=traj,
-            gt_track_id=gt_match,
-            gt_positions=gt_positions,
-            single_dir=single_dir
-        )
-
-        if output_path:
-            status = f"GT:{gt_match}" if gt_match else "No GT"
-            print(f"  Track {track_id:4d} | Len: {traj['length']:3d} | {status}")
+        count += 1
+        print(f"  Track {track_id:4d} | Len: {traj['length']:3d} | Type: {traj.get('type', 'Unknown')}")
 
     # 保存汇总统计
-    summary_path = output_dir / "single_trajectories" / "summary.json"
+    stats = {
+        'total': len(trajectories),
+        f'>= {min_length} frames': count,
+        'long (>=20)': sum(1 for t in trajectories.values() if t['length'] >= 20),
+    }
+    summary_path = single_dir / "summary.json"
     with open(summary_path, 'w', encoding='utf-8') as f:
         json.dump({
             'statistics': stats,
@@ -319,7 +243,6 @@ def visualize_all_single_trajectories(gt_tracks, result_with_map, output_dir: Pa
                 tid: {
                     'length': traj['length'],
                     'type': traj.get('type', 'Unknown'),
-                    'has_gt': find_best_matching_gt_track(traj['positions'], gt_tracks)[0] is not None
                 }
                 for tid, traj in trajectories.items()
                 if traj['length'] >= min_length
@@ -327,8 +250,8 @@ def visualize_all_single_trajectories(gt_tracks, result_with_map, output_dir: Pa
         }, f, indent=2, ensure_ascii=False)
 
     print(f"\n{'='*50}")
-    print(f"Single Trajectory Summary:")
-    print(f"  Total: {stats['total']} | >= {min_length} frames: {stats['with_gt']+stats['without_gt']} | With GT: {stats['with_gt']} | No GT: {stats['without_gt']} | Long (>=20): {stats['long']}")
+    print(f"Trajectory Summary:")
+    print(f"  Total: {stats['total']} | >= {min_length} frames: {stats[f'>= {min_length} frames']} | Long (>=20): {stats['long (>=20)']}")
     print(f"  Output: {single_dir}")
 
 
@@ -341,102 +264,87 @@ def main():
     output_dir.mkdir(exist_ok=True)
 
     num_frames = 297
-    gt_dir = Path('data/00/annotations/result_all_V1')
+    detection_dir = 'data/json_results'
+    map_file = 'data/vector_map.json'
 
     print(f"\nLoading data ({num_frames} frames)...")
 
-    # Load ground truth
-    print("  Loading ground truth...")
-    gt_frames, gt_tracks = load_ground_truth(gt_dir, num_frames)
-    print(f"    GT frames: {len(gt_frames)}, tracks: {len(gt_tracks)}")
+    # Load map
+    print("  Loading map...")
+    try:
+        map_api = MapAPI(map_file=map_file)
+        print(f"    Map loaded: {map_api.map.get_lane_count()} lanes, {map_api.map.get_centerline_count()} centerlines")
+    except FileNotFoundError:
+        print(f"    Warning: Map file not found ({map_file}), proceeding without map")
+        map_api = None
 
     # Load model detections
     print("  Loading model detections...")
-    model_frames = load_model_detections('data/json_results', num_frames)
+    model_frames = load_model_detections(detection_dir, num_frames)
     print(f"    Model frames: {len(model_frames)}")
 
-    # ========== 跟踪参数调优 ==========
-    # 减小 max_distance：让匹配更严格，减少轨迹合并
-    # 减小 max_misses：让轨迹更快过期，增加轨迹数量
-    TRACK_MAX_DISTANCE = 3.0      # 从 5.0 降低到 3.0
-    TRACK_MAX_MISSES = 10         # 从 30 降低到 10
-    TRACK_MIN_HITS = 3            # 从 2 增加到 3（更严格确认）
-    # ================================
-
-    # Run reconstruction (pure DeepSORT, max_distance=3.0)
+    # Run reconstruction with max_distance=3.0
     print("\n" + "-" * 70)
     print("Running reconstruction (max_distance=3.0)...")
     print("-" * 70)
 
-    result_no_map = reconstruct_traffic_flow(
+    result_short = reconstruct_traffic_flow(
         model_frames,
-        max_distance=TRACK_MAX_DISTANCE,
+        max_distance=3.0,
         max_velocity=30.0,
     )
 
-    # Run reconstruction with different parameters
+    # Run reconstruction with max_distance=5.0
     print("\n" + "-" * 70)
     print("Running reconstruction (max_distance=5.0)...")
     print("-" * 70)
 
-    result_with_map = reconstruct_traffic_flow(
+    result_long = reconstruct_traffic_flow(
         model_frames,
         max_distance=5.0,
         max_velocity=30.0,
     )
 
-    # Evaluate
-    gt_lengths = [len(v) for v in gt_tracks.values()]
-
+    # Print statistics
     print("\n" + "=" * 70)
-    print("Results Comparison")
+    print("Results Summary")
     print("=" * 70)
 
-    # Without map
-    traj_no_map = result_no_map.get('trajectories', {})
-    lengths_no_map = [t['length'] for t in traj_no_map.values()]
+    # max_distance=3.0
+    traj_short = result_short.get('trajectories', {})
+    lengths_short = [t['length'] for t in traj_short.values()]
 
-    print("\n[Without Map]")
-    print(f"  Tracks: {len(traj_no_map)}")
-    print(f"  Avg length: {np.mean(lengths_no_map):.1f} frames")
-    print(f"  Max length: {max(lengths_no_map) if lengths_no_map else 0} frames")
-    print(f"  Tracks >= 10 frames: {sum(1 for l in lengths_no_map if l >= 10)}")
-    print(f"  Tracks >= 20 frames: {sum(1 for l in lengths_no_map if l >= 20)}")
+    print("\n[max_distance=3.0]")
+    print(f"  Tracks: {len(traj_short)}")
+    print(f"  Avg length: {np.mean(lengths_short):.1f} frames")
+    print(f"  Max length: {max(lengths_short) if lengths_short else 0} frames")
+    print(f"  Tracks >= 10 frames: {sum(1 for l in lengths_short if l >= 10)}")
+    print(f"  Tracks >= 20 frames: {sum(1 for l in lengths_short if l >= 20)}")
 
-    # With different parameters
-    traj_with_map = result_with_map.get('trajectories', {})
-    lengths_with_map = [t['length'] for t in traj_with_map.values()]
+    # max_distance=5.0
+    traj_long = result_long.get('trajectories', {})
+    lengths_long = [t['length'] for t in traj_long.values()]
 
-    print("\n[With max_distance=5.0]")
-    print(f"  Tracks: {len(traj_with_map)}")
-    print(f"  Avg length: {np.mean(lengths_with_map):.1f} frames")
-    print(f"  Max length: {max(lengths_with_map) if lengths_with_map else 0} frames")
-    print(f"  Tracks >= 10 frames: {sum(1 for l in lengths_with_map if l >= 10)}")
-    print(f"  Tracks >= 20 frames: {sum(1 for l in lengths_with_map if l >= 20)}")
-
-    # Ground truth
-    print("\n[Ground Truth]")
-    print(f"  Tracks: {len(gt_tracks)}")
-    print(f"  Avg length: {np.mean(gt_lengths):.1f} frames")
-    print(f"  Tracks >= 20 frames: {sum(1 for l in gt_lengths if l >= 20)}")
+    print("\n[max_distance=5.0]")
+    print(f"  Tracks: {len(traj_long)}")
+    print(f"  Avg length: {np.mean(lengths_long):.1f} frames")
+    print(f"  Max length: {max(lengths_long) if lengths_long else 0} frames")
+    print(f"  Tracks >= 10 frames: {sum(1 for l in lengths_long if l >= 10)}")
+    print(f"  Tracks >= 20 frames: {sum(1 for l in lengths_long if l >= 20)}")
 
     # Visualize
     print("\nGenerating visualizations...")
-    visualize_comparison(gt_tracks, result_no_map, result_with_map, output_dir)
-    visualize_all_single_trajectories(gt_tracks, result_with_map, output_dir, min_length=10)
+    print("\n[Visualizing max_distance=5.0 results with map]")
+    visualize_results(result_long, map_api, output_dir, min_length=10)
 
     # Save results
     result_path = output_dir / 'reconstruction_result.json'
     with open(result_path, 'w', encoding='utf-8') as f:
         json.dump({
-            'max_distance_3.0': result_no_map,
-            'max_distance_5.0': result_with_map,
-            'ground_truth_summary': {
-                'tracks': len(gt_tracks),
-                'avg_length': np.mean(gt_lengths),
-            }
+            'max_distance_3.0': result_short,
+            'max_distance_5.0': result_long,
         }, f, indent=2, ensure_ascii=False)
-    print(f"Saved: {result_path}")
+    print(f"\nSaved: {result_path}")
 
     print("\nDone!")
 

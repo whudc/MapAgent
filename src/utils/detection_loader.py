@@ -565,7 +565,7 @@ class DetectionLoader:
 
         if isinstance(obj_data, list):
             for obj in obj_data:
-                detected_obj = self._parse_object_old_format(obj)
+                detected_obj = self._parse_object_old_format(obj, ego_transform)
                 if detected_obj:
                     objects.append(detected_obj)
 
@@ -578,7 +578,8 @@ class DetectionLoader:
             ego_transform=ego_transform
         )
 
-    def _parse_object_old_format(self, obj: Dict) -> Optional[DetectedObject]:
+    def _parse_object_old_format(self, obj: Dict,
+                                   ego_transform: Optional[List[List[float]]] = None) -> Optional[DetectedObject]:
         """解析原格式的单个检测对象"""
         try:
             location = obj.get('location')
@@ -588,6 +589,10 @@ class DetectionLoader:
 
             if location is None:
                 return None
+
+            # 应用 ego2global 坐标变换
+            if ego_transform:
+                location = self._transform_point(list(location), ego_transform)
 
             return DetectedObject(
                 id=obj.get('id', 0),
@@ -671,3 +676,26 @@ class DetectionLoader:
         if self._tracker:
             return self._tracker.get_track_statistics()
         return None
+
+    def _transform_point(self, point: List[float], transform: List[List[float]]) -> List[float]:
+        """
+        使用 4x4 变换矩阵将点从局部坐标系转换到全局坐标系
+
+        Args:
+            point: 局部坐标系中的点 [x, y, z]
+            transform: 4x4 齐次变换矩阵
+
+        Returns:
+            全局坐标系中的点 [x, y, z]
+        """
+        if not transform or len(transform) < 4:
+            return point
+
+        x, y, z = point[0], point[1], point[2]
+
+        # 应用 4x4 变换矩阵
+        global_x = transform[0][0] * x + transform[0][1] * y + transform[0][2] * z + transform[0][3]
+        global_y = transform[1][0] * x + transform[1][1] * y + transform[1][2] * z + transform[1][3]
+        global_z = transform[2][0] * x + transform[2][1] * y + transform[2][2] * z + transform[2][3]
+
+        return [global_x, global_y, global_z]

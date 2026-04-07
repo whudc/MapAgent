@@ -248,9 +248,70 @@ class VectorMapMerger:
         self.frames_processed = 0
         self.total_objects_seen = 0
 
-    def process_frame(self, lane_data: Dict, sign_data: Dict = None):
+        # 坐标变换缓存（每帧的 ego2global 矩阵可能不同）
+        self._transform_cache: Dict[int, List[List[float]]] = {}
+
+    def _transform_point(self, point: List[float], transform: List[List[float]]) -> List[float]:
+        """
+        使用 4x4 变换矩阵将点从局部坐标系转换到全局坐标系
+
+        Args:
+            point: 局部坐标系中的点 [x, y, z]
+            transform: 4x4 齐次变换矩阵
+
+        Returns:
+            全局坐标系中的点 [x, y, z]
+        """
+        if not transform or len(transform) < 4:
+            return point
+
+        x, y, z = point[0], point[1], point[2]
+
+        # 应用 4x4 变换矩阵
+        global_x = transform[0][0] * x + transform[0][1] * y + transform[0][2] * z + transform[0][3]
+        global_y = transform[1][0] * x + transform[1][1] * y + transform[1][2] * z + transform[1][3]
+        global_z = transform[2][0] * x + transform[2][1] * y + transform[2][2] * z + transform[2][3]
+
+        return [global_x, global_y, global_z]
+
+    def _apply_frame_transform(self, coords: List[List[float]],
+                                frame_idx: int,
+                                lane_data: Dict) -> List[List[float]]:
+        """
+        对一帧的所有坐标应用 ego2global 变换
+
+        Args:
+            coords: 局部坐标系中的坐标列表
+            frame_idx: 帧索引
+            lane_data: 原始车道线数据（包含 ego2global_transformation_matrix）
+
+        Returns:
+            全局坐标系中的坐标列表
+        """
+        if not coords:
+            return coords
+
+        # 获取或缓存变换矩阵
+        if frame_idx not in self._transform_cache:
+            transform = lane_data.get('ego2global_transformation_matrix')
+            if transform:
+                self._transform_cache[frame_idx] = transform
+            else:
+                return coords  # 没有变换矩阵，返回原坐标
+
+        transform = self._transform_cache[frame_idx]
+        if not transform:
+            return coords
+
+        # 对所有点应用变换
+        return [self._transform_point(p, transform) for p in coords]
+
+    def process_frame(self, lane_data: Dict, sign_data: Dict = None, frame_idx: int = 0):
         """处理单帧数据并合并"""
         self.frames_processed += 1
+
+        # 获取 ego2global 变换矩阵
+        ego_transform = lane_data.get('ego2global_transformation_matrix')
 
         # 解析车道线
         lanes = lane_data.get('lanelines_annotation', {}).get('lane', [])
@@ -262,6 +323,10 @@ class VectorMapMerger:
 
             if not geo_3d:
                 continue
+
+            # 应用 ego2global 坐标变换
+            if ego_transform:
+                geo_3d = self._apply_frame_transform(geo_3d, frame_idx, lane_data)
 
             lane_type = LANE_TYPE_MAP.get(raw_type, LaneType.UNKNOWN).value
             lane_color = LANE_COLOR_MAP.get(raw_color, LaneColor.UNKNOWN).value
@@ -288,12 +353,20 @@ class VectorMapMerger:
 
         # 解析中心线和拓扑关系
         associations = lane_data.get('lanelines_annotation', {}).get('associations', [])
-        lane_coords_map = {str(l['id']): l.get('geo_3d', []) for l in lanes}
+
+        # 构建车道 ID 到变换后坐标的映射
+        lane_coords_map = {}
+        for l in lanes:
+            lid = str(l['id'])
+            coords = l.get('geo_3d', [])
+            if ego_transform:
+                coords = self._apply_frame_transform(coords, frame_idx, lane_data)
+            lane_coords_map[lid] = coords
 
         for assoc in associations:
             centerline_id = str(assoc.get('centerline_id', ''))
 
-            # 获取坐标
+            # 获取坐标（已变换）
             coords = lane_coords_map.get(centerline_id, [])
 
             # 获取拓扑关系
@@ -468,7 +541,7 @@ def generate_static_map(data_dir: str, output_file: str):
             sign_data = json.load(open(sign_file))
 
         # 处理并合并
-        merger.process_frame(lane_data, sign_data)
+        merger.process_frame(lane_data, sign_data, frame_idx=i)
 
         # 进度显示
         if (i + 1) % 50 == 0 or i == len(lane_files) - 1:

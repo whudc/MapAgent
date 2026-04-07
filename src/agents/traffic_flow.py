@@ -476,7 +476,7 @@ class TrafficFlowAgent(BaseAgent):
 3. 使用 get_trajectory_by_id 查询特定轨迹
 4. 使用 save_reconstruction_result 保存结果"""
 
-    def process(self, query: str, **kwargs) -> Dict[str, Any]:
+    def process(self, _query: str, **kwargs) -> Dict[str, Any]:
         """
         处理查询
 
@@ -509,19 +509,81 @@ class TrafficFlowAgent(BaseAgent):
                 return recon_result
 
             # 保存结果
-            save_result = self._save_reconstruction_result(output_path)
+            self._save_reconstruction_result(output_path)
+
+            # 构建帧数据（用于 UI 可视化）
+            frames = self._build_frame_data(start_frame, end_frame)
+
+            # 构建轨迹列表
+            trajectories = []
+            for tid, traj in self._trajectories.items():
+                states = []
+                for i, frame_id in enumerate(traj.frame_ids):
+                    states.append({
+                        'position': traj.positions[i],
+                        'frame_id': frame_id,
+                    })
+                trajectories.append({
+                    'vehicle_id': tid,
+                    'vehicle_type': traj.dominant_type,
+                    'states': states,
+                })
 
             return {
                 "success": True,
                 "message": "交通流重建完成",
-                "reconstruction": recon_result,
-                "saved_to": save_result.get('path'),
+                "frames": frames,
+                "trajectories": trajectories,
+                "total_frames": len(frames),
+                "total_vehicles": len(self._trajectories),
+                "saved_to": output_path,
             }
 
         return {
             "success": False,
             "error": "请提供检测结果路径 (detection_path)",
         }
+
+    def _build_frame_data(self, start_frame: Optional[int] = None,
+                           end_frame: Optional[int] = None) -> List[Dict]:
+        """构建帧数据（用于 UI 可视化）"""
+        frames: List[Dict] = []
+
+        if not self._loader:
+            return frames
+
+        # 获取所有帧 ID
+        frame_ids = self._loader.get_frame_ids()
+
+        for frame_id in frame_ids:
+            if start_frame is not None and frame_id < start_frame:
+                continue
+            if end_frame is not None and frame_id > end_frame:
+                continue
+
+            # 获取该帧的检测数据
+            frame_det = self._loader.load_frame(frame_id, use_tracking=False)
+            if not frame_det:
+                continue
+
+            # 构建车辆列表
+            vehicles = []
+            for obj in frame_det.objects:
+                vehicles.append({
+                    'vehicle_id': obj.tracking_id if obj.tracking_id > 0 else obj.id,
+                    'vehicle_type': obj.type,
+                    'position': list(obj.location),
+                    'heading': obj.heading,
+                    'speed': obj.speed,
+                })
+
+            frames.append({
+                'frame_id': frame_id,
+                'vehicles': vehicles,
+                'vehicle_count': len(vehicles),
+            })
+
+        return frames
 
     # ==================== 工具实现 ====================
 

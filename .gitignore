@@ -9,3 +9,5 @@ test_output/
 *.csv
 *.json
 *.txt
+
+vllm/

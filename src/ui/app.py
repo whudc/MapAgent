@@ -258,7 +258,11 @@ class FastMapVisualizer:
         self._build_cache()
 
     def _build_cache(self):
-        """预构建数据缓存"""
+        """预构建数据缓存
+
+        注意: 地图数据存在 Y 坐标符号问题（原始存储为负值，实际应为正值）。
+        这里对 Y 坐标进行符号翻转，使其与检测结果（json_results）的坐标系对齐。
+        """
         self._cache = {
             'lanes': {},
             'centerlines': {}
@@ -278,28 +282,32 @@ class FastMapVisualizer:
             'no_lane': '#FFFFFF',
         }
 
-        # 缓存车道
+        # 缓存车道（修正 Y 坐标符号）
         for lane_id, lane in self.map_api.map.lane_lines.items():
             coords = np.array(lane.coordinates)
             if len(coords.shape) == 1:
                 coords = coords.reshape(1, -1)
             if len(coords) >= 2:
+                # Y 坐标符号翻转：地图存储为负值，实际应为正值
+                y_coords = -coords[:, 1]  # 翻转 Y 符号
                 self._cache['lanes'][lane_id] = {
                     'x': coords[:, 0].tolist(),
-                    'y': coords[:, 1].tolist(),
+                    'y': y_coords.tolist(),
                     'type': lane.type,
                     'color': lane_colors.get(lane.type, '#CCCCCC')
                 }
 
-        # 缓存中心线
+        # 缓存中心线（修正 Y 坐标符号）
         for cl_id, cl in self.map_api.map.centerlines.items():
             coords = np.array(cl.coordinates)
             if len(coords.shape) == 1:
                 coords = coords.reshape(1, -1)
             if len(coords) >= 2:
+                # Y 坐标符号翻转
+                y_coords = -coords[:, 1]  # 翻转 Y 符号
                 self._cache['centerlines'][cl_id] = {
                     'x': coords[:, 0].tolist(),
-                    'y': coords[:, 1].tolist()
+                    'y': y_coords.tolist()
                 }
 
     def draw_map(self, center_x=None, center_y=None, zoom=1.0,

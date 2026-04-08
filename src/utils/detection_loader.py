@@ -316,13 +316,15 @@ class DetectionLoader:
     支持车辆跟踪
     """
 
-    def __init__(self, detection_path: str, enable_tracking: bool = True):
+    def __init__(self, detection_path: str, enable_tracking: bool = True,
+                 ego_transform_path: Optional[str] = None):
         """
         初始化
 
         Args:
             detection_path: 检测结果目录路径
             enable_tracking: 是否启用跟踪（默认True）
+            ego_transform_path: ego 变换矩阵目录路径（用于 json_results 格式的坐标变换）
         """
         self.detection_path = Path(detection_path)
         self._frame_files: Dict[int, Path] = {}
@@ -331,6 +333,11 @@ class DetectionLoader:
         self._enable_tracking = enable_tracking
         self._tracker = VehicleTracker() if enable_tracking else None
         self._tracking_done = False
+
+        # ego 变换矩阵目录（用于 json_results 格式）
+        self._ego_transform_path = Path(ego_transform_path) if ego_transform_path else None
+        self._ego_transforms: Dict[int, List[List[float]]] = {}
+
         self._scan_directory()
 
     def _scan_directory(self):
@@ -370,6 +377,68 @@ class DetectionLoader:
                     self._data_format = DataFormat.RESULT_ALL_V1
             except Exception:
                 self._data_format = DataFormat.RESULT_ALL_V1
+
+        # 对于 JSON_RESULTS 格式，自动查找 ego 变换文件
+        if self._data_format == DataFormat.JSON_RESULTS and self._ego_transform_path is None:
+            self._auto_find_ego_transform_path()
+
+        # 加载 ego 变换矩阵
+        if self._data_format == DataFormat.JSON_RESULTS and self._ego_transform_path:
+            self._load_ego_transforms()
+
+    def _auto_find_ego_transform_path(self):
+        """自动查找 ego 变换矩阵目录"""
+        # 尝试常见的路径
+        possible_paths = [
+            self.detection_path.parent / "00" / "annotations" / "result_all_V1",
+            self.detection_path.parent / "annotations" / "result_all_V1",
+            self.detection_path.parent.parent / "00" / "annotations" / "result_all_V1",
+            Path("data/00/annotations/result_all_V1"),
+        ]
+
+        for path in possible_paths:
+            if path.exists() and list(path.glob("*.json")):
+                self._ego_transform_path = path
+                print(f"自动找到 ego 变换目录: {path}")
+                return
+
+    def _load_ego_transforms(self):
+        """加载所有帧的 ego 变换矩阵"""
+        if not self._ego_transform_path or not self._ego_transform_path.exists():
+            return
+
+        for frame_id in self._sorted_frame_ids:
+            # 构建对应的原始文件路径
+            # 00_000000.json -> 000000.json
+            transform_file = self._ego_transform_path / f"{frame_id:06d}.json"
+
+            if not transform_file.exists():
+                continue
+
+            try:
+                with open(transform_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    data = json.load(f)
+
+                transform = data.get('ego2global_transformation_matrix')
+                if transform:
+                    self._ego_transforms[frame_id] = transform
+            except Exception:
+                continue
+
+        if self._ego_transforms:
+            print(f"加载了 {len(self._ego_transforms)} 个 ego 变换矩阵")
+
+    def _transform_point(self, point: List[float], transform: List[List[float]]) -> List[float]:
+        """使用变换矩阵变换点坐标"""
+        if not transform or len(transform) < 4:
+            return point
+
+        x, y, z = point[0], point[1], point[2]
+        global_x = transform[0][0] * x + transform[0][1] * y + transform[0][2] * z + transform[0][3]
+        global_y = transform[1][0] * x + transform[1][1] * y + transform[1][2] * z + transform[1][3]
+        global_z = transform[2][0] * x + transform[2][1] * y + transform[2][2] * z + transform[2][3]
+
+        return [global_x, global_y, global_z]
 
     def get_data_format(self) -> DataFormat:
         """获取数据格式"""
@@ -485,9 +554,15 @@ class DetectionLoader:
         print(f"跟踪完成: 共 {stats['total_tracks']} 个轨迹")
 
     def _parse_json_results_format(self, frame_id: int, data: Dict) -> FrameDetection:
-        """解析新格式数据 (json_results)"""
+        """解析新格式数据 (json_results)
+
+        注意: json_results 格式的坐标已经是全局坐标系，不需要应用 ego 变换。
+        检测坐标是 ego 全局位置 + 局部偏移，直接使用即可。
+        """
         token = data.get('token', '')
         sequence = data.get('sequence', '')
+
+        # json_results 格式的坐标已经是全局坐标系，不需要 ego 变换
 
         # 解析检测对象
         objects = []
@@ -499,25 +574,31 @@ class DetectionLoader:
                 size = det.get('size', {})
                 vel = det.get('velocity', {})
 
+                # json_results 坐标已经是全局坐标，直接使用
+                location = [
+                    pos.get('x', 0.0),
+                    pos.get('y', 0.0),
+                    pos.get('z', 0.0)
+                ]
+
+                # 速度
+                velocity = [
+                    vel.get('vx', 0.0),
+                    vel.get('vy', 0.0),
+                    0.0
+                ]
+
                 obj = DetectedObject(
                     id=det.get('id', 0),
                     type=det.get('class', 'Unknown'),
-                    location=(
-                        pos.get('x', 0.0),
-                        pos.get('y', 0.0),
-                        pos.get('z', 0.0)
-                    ),
+                    location=tuple(location),
                     size=(
                         size.get('length', 4.0),
                         size.get('width', 2.0),
                         size.get('height', 1.5)
                     ),
                     rotation=(0.0, 0.0, det.get('heading', 0.0)),
-                    velocity=(
-                        vel.get('vx', 0.0),
-                        vel.get('vy', 0.0),
-                        0.0
-                    ),
+                    velocity=tuple(velocity),
                     heading=det.get('heading', 0.0),
                     score=det.get('score', 1.0),
                     tracking_id=-1  # 初始化为未分配

@@ -1,7 +1,7 @@
 """
 交通流重建测试
 
-测试纯 DeepSORT 跟踪器的轨迹重建效果
+测试 TrafficFlowAgent 的轨迹重建效果（与 UI 使用方式一致）
 """
 
 import sys
@@ -18,7 +18,8 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "src"))
 
-from agents.traffic_flow import reconstruct_traffic_flow
+from agents.traffic_flow import TrafficFlowAgent, reconstruct_traffic_flow
+from agents.base import AgentContext
 from utils.detection_loader import DetectionLoader
 from apis.map_api import MapAPI
 
@@ -257,7 +258,7 @@ def visualize_results(result: dict, map_api: Optional[MapAPI], output_dir: Path,
 
 def main():
     print("=" * 70)
-    print("Traffic Flow Reconstruction Test (Pure DeepSORT)")
+    print("Traffic Flow Reconstruction Test (TrafficFlowAgent)")
     print("=" * 70)
 
     output_dir = Path('test_output')
@@ -267,82 +268,99 @@ def main():
     detection_dir = 'data/json_results'
     map_file = 'data/vector_map.json'
 
-    print(f"\nLoading data ({num_frames} frames)...")
+    print(f"\nConfig:")
+    print(f"  Detection dir: {detection_dir}")
+    print(f"  Map file: {map_file}")
+    print(f"  Num frames: {num_frames}")
 
     # Load map
-    print("  Loading map...")
+    print("\nLoading map...")
     try:
         map_api = MapAPI(map_file=map_file)
-        print(f"    Map loaded: {map_api.map.get_lane_count()} lanes, {map_api.map.get_centerline_count()} centerlines")
+        print(f"  Map loaded: {map_api.map.get_lane_count()} lanes, {map_api.map.get_centerline_count()} centerlines")
     except FileNotFoundError:
-        print(f"    Warning: Map file not found ({map_file}), proceeding without map")
+        print(f"  Warning: Map file not found ({map_file}), proceeding without map")
         map_api = None
 
-    # Load model detections
-    print("  Loading model detections...")
-    model_frames = load_model_detections(detection_dir, num_frames)
-    print(f"    Model frames: {len(model_frames)}")
+    # 使用 Agent 方式重建（与 UI 一致）
+    print("\n" + "=" * 70)
+    print("Method 1: TrafficFlowAgent.process() (与 UI 一致)")
+    print("=" * 70)
 
-    # Run reconstruction with max_distance=3.0
-    print("\n" + "-" * 70)
-    print("Running reconstruction (max_distance=3.0)...")
-    print("-" * 70)
+    # 创建 Agent 上下文
+    context = AgentContext(map_api=map_api, llm_client=None)
 
-    result_short = reconstruct_traffic_flow(
-        model_frames,
-        max_distance=3.0,
-        max_velocity=30.0,
+    # 创建 Agent（use_llm=False，纯 DeepSORT 模式）
+    agent = TrafficFlowAgent(context, use_llm=False)
+    print(f"  Agent created: {agent.name}")
+
+    # 调用 process 方法（与 UI 调用方式一致）
+    print(f"\n  Running reconstruction via process()...")
+    result_agent = agent.process(
+        query="基于检测结果重建交通流",
+        detection_path=detection_dir,
+        start_frame=None,
+        end_frame=None,
+        output_path=str(output_dir / 'agent_result.json')
     )
 
-    # Run reconstruction with max_distance=5.0
-    print("\n" + "-" * 70)
-    print("Running reconstruction (max_distance=5.0)...")
-    print("-" * 70)
+    if result_agent.get('success'):
+        print(f"  Success!")
+        print(f"    Total frames: {result_agent.get('total_frames', 0)}")
+        print(f"    Total vehicles: {result_agent.get('total_vehicles', 0)}")
+        trajectories_agent = result_agent.get('trajectories', [])
+    else:
+        print(f"  Failed: {result_agent.get('error', 'Unknown error')}")
+        trajectories_agent = []
 
-    result_long = reconstruct_traffic_flow(
+    # 对比：使用便捷函数方式
+    print("\n" + "=" * 70)
+    print("Method 2: reconstruct_traffic_flow() (便捷函数)")
+    print("=" * 70)
+
+    # Load model detections for convenience function
+    model_frames = load_model_detections(detection_dir, num_frames)
+    print(f"  Loaded {len(model_frames)} frames")
+
+    result_func = reconstruct_traffic_flow(
         model_frames,
         max_distance=5.0,
         max_velocity=30.0,
     )
 
-    # Print statistics
+    traj_func = result_func.get('trajectories', {})
+    lengths_func = [t['length'] for t in traj_func.values()]
+
+    print(f"  Tracks: {len(traj_func)}")
+    print(f"  Avg length: {np.mean(lengths_func):.1f} frames")
+    print(f"  Max length: {max(lengths_func) if lengths_func else 0} frames")
+
+    # 打印 Agent 结果统计
     print("\n" + "=" * 70)
-    print("Results Summary")
+    print("Agent Results Summary")
     print("=" * 70)
 
-    # max_distance=3.0
-    traj_short = result_short.get('trajectories', {})
-    lengths_short = [t['length'] for t in traj_short.values()]
+    if trajectories_agent:
+        lengths_agent = [t.get('length', len(t.get('states', []))) for t in trajectories_agent]
+        print(f"  Total trajectories: {len(trajectories_agent)}")
+        print(f"  Avg length: {np.mean(lengths_agent):.1f} frames")
+        print(f"  Max length: {max(lengths_agent) if lengths_agent else 0} frames")
+        print(f"  Tracks >= 10 frames: {sum(1 for l in lengths_agent if l >= 10)}")
+        print(f"  Tracks >= 20 frames: {sum(1 for l in lengths_agent if l >= 20)}")
 
-    print("\n[max_distance=3.0]")
-    print(f"  Tracks: {len(traj_short)}")
-    print(f"  Avg length: {np.mean(lengths_short):.1f} frames")
-    print(f"  Max length: {max(lengths_short) if lengths_short else 0} frames")
-    print(f"  Tracks >= 10 frames: {sum(1 for l in lengths_short if l >= 10)}")
-    print(f"  Tracks >= 20 frames: {sum(1 for l in lengths_short if l >= 20)}")
-
-    # max_distance=5.0
-    traj_long = result_long.get('trajectories', {})
-    lengths_long = [t['length'] for t in traj_long.values()]
-
-    print("\n[max_distance=5.0]")
-    print(f"  Tracks: {len(traj_long)}")
-    print(f"  Avg length: {np.mean(lengths_long):.1f} frames")
-    print(f"  Max length: {max(lengths_long) if lengths_long else 0} frames")
-    print(f"  Tracks >= 10 frames: {sum(1 for l in lengths_long if l >= 10)}")
-    print(f"  Tracks >= 20 frames: {sum(1 for l in lengths_long if l >= 20)}")
-
-    # Visualize
+    # Visualize (使用便捷函数的结果，因为格式兼容)
     print("\nGenerating visualizations...")
-    print("\n[Visualizing max_distance=5.0 results with map]")
-    visualize_results(result_long, map_api, output_dir, min_length=10)
+    visualize_results(result_func, map_api, output_dir, min_length=10)
 
     # Save results
     result_path = output_dir / 'reconstruction_result.json'
     with open(result_path, 'w', encoding='utf-8') as f:
         json.dump({
-            'max_distance_3.0': result_short,
-            'max_distance_5.0': result_long,
+            'agent_method': {
+                'total_frames': result_agent.get('total_frames', 0),
+                'total_vehicles': result_agent.get('total_vehicles', 0),
+            },
+            'convenience_function': result_func,
         }, f, indent=2, ensure_ascii=False)
     print(f"\nSaved: {result_path}")
 

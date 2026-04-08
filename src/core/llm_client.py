@@ -33,6 +33,8 @@ class LLMProvider(str, Enum):
     DEEPSEEK = "deepseek"
     OPENAI = "openai"
     LOCAL = "local"
+    QWEN_LOCAL = "qwen_local"  # 本地 Qwen 模型
+    GEMMA4_LOCAL = "gemma4_local"  # 本地 Gemma4 模型
 
 
 @dataclass
@@ -48,6 +50,10 @@ class LLMConfig:
 
     # 本地模型配置
     local_model_path: Optional[str] = None
+    local_model_type: Optional[str] = None  # qwen 或 gemma4
+
+    # 项目根目录（用于查找本地模型）
+    project_root: Optional[str] = None
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
@@ -60,8 +66,15 @@ class LLMConfig:
             "deepseek": LLMProvider.DEEPSEEK,
             "openai": LLMProvider.OPENAI,
             "local": LLMProvider.LOCAL,
+            "qwen_local": LLMProvider.QWEN_LOCAL,
+            "qwen": LLMProvider.QWEN_LOCAL,
+            "gemma4_local": LLMProvider.GEMMA4_LOCAL,
+            "gemma4": LLMProvider.GEMMA4_LOCAL,
         }
         provider = provider_map.get(provider_str, LLMProvider.ANTHROPIC)
+
+        # 项目根目录
+        project_root = os.getenv("PROJECT_ROOT", "/data/DC/MapAgent")
 
         # 根据提供商选择默认模型
         default_models = {
@@ -69,6 +82,8 @@ class LLMConfig:
             LLMProvider.DEEPSEEK: "deepseek-reasoner",
             LLMProvider.OPENAI: "gpt-4o",
             LLMProvider.LOCAL: "Qwen3___5-35B-A3B",
+            LLMProvider.QWEN_LOCAL: "Qwen3___5-35B-A3B",
+            LLMProvider.GEMMA4_LOCAL: "gemma-4-31B-it",
         }
 
         # 根据提供商选择 API key
@@ -79,6 +94,8 @@ class LLMConfig:
             api_key = os.getenv("DEEPSEEK_API_KEY")
         elif provider == LLMProvider.OPENAI:
             api_key = os.getenv("OPENAI_API_KEY")
+        elif provider in [LLMProvider.LOCAL, LLMProvider.QWEN_LOCAL, LLMProvider.GEMMA4_LOCAL]:
+            api_key = "dummy"  # 本地模型不需要真实 API key
 
         # base_url
         base_url = os.getenv("LLM_BASE_URL")
@@ -87,6 +104,17 @@ class LLMConfig:
                 base_url = "https://api.deepseek.com"
             elif provider == LLMProvider.LOCAL:
                 base_url = "http://localhost:8000/v1"
+            elif provider == LLMProvider.QWEN_LOCAL:
+                base_url = os.getenv("QWEN_BASE_URL", "http://localhost:8000/v1")
+            elif provider == LLMProvider.GEMMA4_LOCAL:
+                base_url = os.getenv("GEMMA4_BASE_URL", "http://localhost:8001/v1")
+
+        # 本地模型类型
+        local_model_type = None
+        if provider == LLMProvider.QWEN_LOCAL:
+            local_model_type = "qwen"
+        elif provider == LLMProvider.GEMMA4_LOCAL:
+            local_model_type = "gemma4"
 
         return cls(
             provider=provider,
@@ -96,6 +124,8 @@ class LLMConfig:
             max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4096")),
             temperature=float(os.getenv("LLM_TEMPERATURE", "0.7")),
             local_model_path=os.getenv("LOCAL_MODEL_PATH"),
+            local_model_type=local_model_type,
+            project_root=project_root,
         )
 
     @classmethod
@@ -111,11 +141,58 @@ class LLMConfig:
     @classmethod
     def for_local(cls, model: str = "Qwen3___5-35B-A3B",
                   base_url: str = "http://localhost:8000/v1") -> "LLMConfig":
-        """创建本地模型配置"""
+        """创建本地模型配置（通用）"""
         return cls(
             provider=LLMProvider.LOCAL,
             model=model,
             base_url=base_url,
+            api_key="dummy",
+        )
+
+    @classmethod
+    def for_qwen_local(cls, model_path: Optional[str] = None,
+                       port: int = 8000) -> "LLMConfig":
+        """创建本地 Qwen 模型配置
+
+        Args:
+            model_path: 模型路径，默认为 model/Qwen/Qwen3___5-35B-A3B
+            port: 服务端口，默认 8000
+        """
+        project_root = os.getenv("PROJECT_ROOT", "/data/DC/MapAgent")
+        default_path = os.path.join(project_root, "model", "Qwen", "Qwen3___5-35B-A3B")
+
+        return cls(
+            provider=LLMProvider.QWEN_LOCAL,
+            model="Qwen3___5-35B-A3B",
+            base_url=f"http://localhost:{port}/v1",
+            api_key="dummy",
+            local_model_path=model_path or default_path,
+            local_model_type="qwen",
+            project_root=project_root,
+        )
+
+    @classmethod
+    def for_gemma4_local(cls, model_path: Optional[str] = None,
+                         gguf_file: str = "gemma-4-31B-it-Q4_K_M.gguf",
+                         port: int = 8001) -> "LLMConfig":
+        """创建本地 Gemma4 模型配置
+
+        Args:
+            model_path: 模型目录路径，默认为 model/gemma4
+            gguf_file: GGUF 模型文件名
+            port: 服务端口，默认 8001
+        """
+        project_root = os.getenv("PROJECT_ROOT", "/data/DC/MapAgent")
+        default_path = os.path.join(project_root, "model", "gemma4")
+
+        return cls(
+            provider=LLMProvider.GEMMA4_LOCAL,
+            model=gguf_file.replace(".gguf", ""),  # 模型名称去掉扩展名
+            base_url=f"http://localhost:{port}/v1",
+            api_key="dummy",
+            local_model_path=model_path or default_path,
+            local_model_type="gemma4",
+            project_root=project_root,
         )
 
 
@@ -381,7 +458,7 @@ class LLMClient:
         if self.config.provider == LLMProvider.ANTHROPIC:
             return AnthropicClient(self.config)
         else:
-            # Deepseek, OpenAI, Local 都使用 OpenAI 兼容接口
+            # Deepseek, OpenAI, Local, Qwen_local, Gemma4_local 都使用 OpenAI 兼容接口
             return OpenAICompatibleClient(self.config)
 
     def register_tool(self, name: str, description: str,
@@ -467,7 +544,13 @@ def create_client(provider: str = "anthropic", **kwargs) -> LLMClient:
     创建 LLM 客户端
 
     Args:
-        provider: 提供商名称
+        provider: 提供商名称，支持:
+            - anthropic / claude
+            - deepseek
+            - openai
+            - local
+            - qwen / qwen_local
+            - gemma4 / gemma4_local
         **kwargs: 配置参数
 
     Returns:
@@ -479,10 +562,26 @@ def create_client(provider: str = "anthropic", **kwargs) -> LLMClient:
         "deepseek": LLMProvider.DEEPSEEK,
         "openai": LLMProvider.OPENAI,
         "local": LLMProvider.LOCAL,
+        "qwen": LLMProvider.QWEN_LOCAL,
+        "qwen_local": LLMProvider.QWEN_LOCAL,
+        "gemma4": LLMProvider.GEMMA4_LOCAL,
+        "gemma4_local": LLMProvider.GEMMA4_LOCAL,
     }
 
     config = LLMConfig(
         provider=provider_map.get(provider.lower(), LLMProvider.ANTHROPIC),
         **kwargs
     )
+    return LLMClient(config)
+
+
+def create_qwen_client(port: int = 8000, **kwargs) -> LLMClient:
+    """创建本地 Qwen 模型客户端"""
+    config = LLMConfig.for_qwen_local(port=port, **kwargs)
+    return LLMClient(config)
+
+
+def create_gemma4_client(port: int = 8001, gguf_file: str = "gemma-4-31B-it-Q4_K_M.gguf", **kwargs) -> LLMClient:
+    """创建本地 Gemma4 模型客户端"""
+    config = LLMConfig.for_gemma4_local(port=port, gguf_file=gguf_file, **kwargs)
     return LLMClient(config)

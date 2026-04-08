@@ -44,6 +44,7 @@ class TrafficFlowVisualizer:
         self._trajectories: List[Dict] = []
         self._current_frame_idx: int = 0
         self._map_visualizer: Optional['FastMapVisualizer'] = None
+        self._is_playing: bool = False
 
     def set_data(self, result: Dict):
         """设置交通流数据"""
@@ -68,10 +69,20 @@ class TrafficFlowVisualizer:
         if 0 <= idx < len(self._frames):
             self._current_frame_idx = idx
 
+    def toggle_play(self) -> bool:
+        """切换播放状态"""
+        self._is_playing = not self._is_playing
+        return self._is_playing
+
+    def is_playing(self) -> bool:
+        """是否正在播放"""
+        return self._is_playing
+
     def draw_frame(self, frame_idx: int = None,
                    show_trajectories: bool = False,
-                   show_ids: bool = True) -> go.Figure:
-        """绘制指定帧"""
+                   show_ids: bool = True,
+                   show_map: bool = True) -> go.Figure:
+        """绘制指定帧（带地图底图）"""
         if frame_idx is None:
             frame_idx = self._current_frame_idx
 
@@ -96,6 +107,10 @@ class TrafficFlowVisualizer:
         else:
             x_range, y_range = (0, 100), (0, 100)
 
+        # 绘制地图底图
+        if show_map and self._map_visualizer:
+            self._draw_map_background(fig, x_range, y_range)
+
         # 绘制车辆
         for v in vehicles:
             pos = v.get('position', [0, 0, 0])
@@ -105,15 +120,15 @@ class TrafficFlowVisualizer:
 
             color = VEHICLE_COLORS.get(v_type, VEHICLE_COLORS['Unknown'])
 
-            # 绘制车辆矩形（简化为点+方向箭头）
+            # 绘制车辆点
             fig.add_trace(go.Scatter(
                 x=[pos[0]], y=[pos[1]],
                 mode='markers',
                 marker=dict(
                     size=15,
                     color=color,
-                    symbol='square',
-                    angle=heading if heading else 0
+                    symbol='circle',
+                    line=dict(width=2, color='white')
                 ),
                 showlegend=False,
                 hovertemplate=f'<b>ID: {v_id}</b><br>类型: {v_type}<br>位置: ({pos[0]:.1f}, {pos[1]:.1f})<extra></extra>',
@@ -133,7 +148,7 @@ class TrafficFlowVisualizer:
 
         # 绘制轨迹（如果启用）
         if show_trajectories and self._trajectories:
-            for traj in self._trajectories[:10]:  # 最多显示10条轨迹
+            for traj in self._trajectories[:20]:  # 最多显示20条轨迹
                 states = traj.get('states', [])
                 if len(states) >= 2:
                     x_coords = [s['position'][0] for s in states]
@@ -170,15 +185,68 @@ class TrafficFlowVisualizer:
             title=dict(text=f"帧 {frame_id} | 车辆数: {vehicle_count}", x=0.5),
             xaxis=dict(range=x_range, scaleratio=1),
             yaxis=dict(range=y_range, scaleratio=1),
-            plot_bgcolor='white',
+            plot_bgcolor='#f5f5f5',
             margin=dict(l=0, r=0, t=50, b=0),
-            height=500,
+            height=600,
             dragmode='pan',
         )
         fig.update_xaxes(showgrid=True, gridcolor='lightgray')
         fig.update_yaxes(showgrid=True, gridcolor='lightgray')
 
         return fig
+
+    def _draw_map_background(self, fig: go.Figure, x_range: tuple, y_range: tuple):
+        """绘制地图背景"""
+        if not self._map_visualizer or not self._map_visualizer._cache:
+            return
+
+        cache = self._map_visualizer._cache
+
+        # 绘制车道线
+        for lane_id, lane_data in cache.get('lanes', {}).items():
+            x_vals = lane_data['x']
+            y_vals = lane_data['y']
+            color = lane_data.get('color', '#CCCCCC')
+
+            # 过滤在视图范围内的点
+            visible_x = []
+            visible_y = []
+            for x, y in zip(x_vals, y_vals):
+                if x_range[0] - 50 <= x <= x_range[1] + 50 and y_range[0] - 50 <= y <= y_range[1] + 50:
+                    visible_x.append(x)
+                    visible_y.append(y)
+
+            if len(visible_x) >= 2:
+                fig.add_trace(go.Scatter(
+                    x=visible_x, y=visible_y,
+                    mode='lines',
+                    line=dict(color=color, width=2),
+                    showlegend=False,
+                    hoverinfo='skip',
+                    name=f'lane_{lane_id}'
+                ))
+
+        # 绘制中心线
+        for cl_id, cl_data in cache.get('centerlines', {}).items():
+            x_vals = cl_data['x']
+            y_vals = cl_data['y']
+
+            visible_x = []
+            visible_y = []
+            for x, y in zip(x_vals, y_vals):
+                if x_range[0] - 50 <= x <= x_range[1] + 50 and y_range[0] - 50 <= y <= y_range[1] + 50:
+                    visible_x.append(x)
+                    visible_y.append(y)
+
+            if len(visible_x) >= 2:
+                fig.add_trace(go.Scatter(
+                    x=visible_x, y=visible_y,
+                    mode='lines',
+                    line=dict(color='#4169E1', width=1, dash='dash'),
+                    showlegend=False,
+                    hoverinfo='skip',
+                    name=f'centerline_{cl_id}'
+                ))
 
 
 class FastMapVisualizer:
@@ -190,7 +258,11 @@ class FastMapVisualizer:
         self._build_cache()
 
     def _build_cache(self):
-        """预构建数据缓存"""
+        """预构建数据缓存
+
+        注意: 地图数据存在 Y 坐标符号问题（原始存储为负值，实际应为正值）。
+        这里对 Y 坐标进行符号翻转，使其与检测结果（json_results）的坐标系对齐。
+        """
         self._cache = {
             'lanes': {},
             'centerlines': {}
@@ -210,28 +282,32 @@ class FastMapVisualizer:
             'no_lane': '#FFFFFF',
         }
 
-        # 缓存车道
+        # 缓存车道（修正 Y 坐标符号）
         for lane_id, lane in self.map_api.map.lane_lines.items():
             coords = np.array(lane.coordinates)
             if len(coords.shape) == 1:
                 coords = coords.reshape(1, -1)
             if len(coords) >= 2:
+                # Y 坐标符号翻转：地图存储为负值，实际应为正值
+                y_coords = -coords[:, 1]  # 翻转 Y 符号
                 self._cache['lanes'][lane_id] = {
                     'x': coords[:, 0].tolist(),
-                    'y': coords[:, 1].tolist(),
+                    'y': y_coords.tolist(),
                     'type': lane.type,
                     'color': lane_colors.get(lane.type, '#CCCCCC')
                 }
 
-        # 缓存中心线
+        # 缓存中心线（修正 Y 坐标符号）
         for cl_id, cl in self.map_api.map.centerlines.items():
             coords = np.array(cl.coordinates)
             if len(coords.shape) == 1:
                 coords = coords.reshape(1, -1)
             if len(coords) >= 2:
+                # Y 坐标符号翻转
+                y_coords = -coords[:, 1]  # 翻转 Y 符号
                 self._cache['centerlines'][cl_id] = {
                     'x': coords[:, 0].tolist(),
-                    'y': coords[:, 1].tolist()
+                    'y': y_coords.tolist()
                 }
 
     def draw_map(self, center_x=None, center_y=None, zoom=1.0,
@@ -435,7 +511,16 @@ class MapAgentUI:
         self.map_api = MapAPI(map_file=map_file)
         self.visualizer = FastMapVisualizer(self.map_api)
 
-    def init_agent(self, provider: str, api_key: str = None):
+    def init_agent(self, provider: str, api_key: str = None, port: int = None, gguf_file: str = None):
+        """初始化 Agent
+
+        Args:
+            provider: LLM 提供商
+            api_key: API Key（本地模型不需要）
+            port: 本地模型服务端口
+            gguf_file: Gemma4 GGUF 模型文件名
+        """
+        # 设置环境变量
         if api_key:
             if provider == "deepseek":
                 os.environ["DEEPSEEK_API_KEY"] = api_key
@@ -443,6 +528,20 @@ class MapAgentUI:
                 os.environ["ANTHROPIC_API_KEY"] = api_key
             elif provider == "openai":
                 os.environ["OPENAI_API_KEY"] = api_key
+
+        # 本地模型配置
+        if provider in ["qwen_local", "qwen"]:
+            port = port or 8000
+            os.environ["QWEN_BASE_URL"] = f"http://localhost:{port}/v1"
+            os.environ["LLM_PROVIDER"] = "qwen_local"
+            api_key = "dummy"  # 本地模型不需要真实 API key
+        elif provider in ["gemma4_local", "gemma4"]:
+            port = port or 8001
+            gguf_file = gguf_file or "gemma-4-31B-it-Q4_K_M.gguf"
+            os.environ["GEMMA4_BASE_URL"] = f"http://localhost:{port}/v1"
+            os.environ["LLM_PROVIDER"] = "gemma4_local"
+            os.environ["LLM_MODEL"] = gguf_file.replace(".gguf", "")
+            api_key = "dummy"
 
         self.agent = create_master_agent(
             map_file=str(settings.map_path),
@@ -499,13 +598,27 @@ class MapAgentUI:
         self.current_position = (x, y, 0)
         return f"已设置位置: ({x:.1f}, {y:.1f})"
 
-    def chat(self, message: str, provider: str, api_key: str, history: list):
+    def chat(self, message: str, provider: str, api_key: str, history: list,
+                 port: int = None, gguf_file: str = None):
         if not message.strip():
             return history, ""
 
-        if not self.agent or (api_key and api_key != getattr(self, '_last_api_key', None)):
-            self.init_agent(provider, api_key)
+        # 检查是否需要重新初始化 Agent
+        need_reinit = False
+        if not self.agent:
+            need_reinit = True
+        elif provider in ["qwen_local", "gemma4_local"] and port != getattr(self, '_last_port', None):
+            need_reinit = True
+        elif gguf_file and gguf_file != getattr(self, '_last_gguf', None):
+            need_reinit = True
+        elif api_key and api_key != getattr(self, '_last_api_key', None):
+            need_reinit = True
+
+        if need_reinit:
+            self.init_agent(provider, api_key, port, gguf_file)
             self._last_api_key = api_key
+            self._last_port = port
+            self._last_gguf = gguf_file
 
         history = history or []
         history.append({"role": "user", "content": message})
@@ -593,14 +706,17 @@ class MapAgentUI:
             if result.get('success'):
                 self.traffic_flow_result = result
                 self.traffic_flow_visualizer.set_data(result)
+                # 设置地图可视化器（用于底图显示）
+                if self.visualizer:
+                    self.traffic_flow_visualizer.set_map_visualizer(self.visualizer)
                 return result, f"重建成功！共 {result['total_frames']} 帧，{result['total_vehicles']} 辆车辆"
             else:
-                return result, result.get('summary', '重建失败')
+                return result, result.get('message', '重建失败')
 
         except Exception as e:
             return None, f"重建失败: {str(e)}"
 
-    def get_traffic_flow_frame(self, frame_idx: int, show_trajectories: bool, show_ids: bool):
+    def get_traffic_flow_frame(self, frame_idx: int, show_trajectories: bool, show_ids: bool, show_map: bool = True):
         """获取交通流帧可视化"""
         if not self.traffic_flow_result:
             fig = go.Figure()
@@ -611,35 +727,36 @@ class MapAgentUI:
         fig = self.traffic_flow_visualizer.draw_frame(
             frame_idx=frame_idx,
             show_trajectories=show_trajectories,
-            show_ids=show_ids
+            show_ids=show_ids,
+            show_map=show_map
         )
 
         total_frames = self.traffic_flow_visualizer.get_frame_count()
         return fig, frame_idx, total_frames - 1
 
-    def traffic_flow_first_frame(self, show_trajectories: bool, show_ids: bool):
+    def traffic_flow_first_frame(self, show_trajectories: bool, show_ids: bool, show_map: bool = True):
         """跳转到第一帧"""
-        return self.get_traffic_flow_frame(0, show_trajectories, show_ids)
+        return self.get_traffic_flow_frame(0, show_trajectories, show_ids, show_map)
 
-    def traffic_flow_prev_frame(self, current_idx: int, show_trajectories: bool, show_ids: bool):
+    def traffic_flow_prev_frame(self, current_idx: int, show_trajectories: bool, show_ids: bool, show_map: bool = True):
         """前一帧"""
         new_idx = max(0, current_idx - 1)
-        return self.get_traffic_flow_frame(new_idx, show_trajectories, show_ids)
+        return self.get_traffic_flow_frame(new_idx, show_trajectories, show_ids, show_map)
 
-    def traffic_flow_next_frame(self, current_idx: int, show_trajectories: bool, show_ids: bool):
+    def traffic_flow_next_frame(self, current_idx: int, show_trajectories: bool, show_ids: bool, show_map: bool = True):
         """后一帧"""
         if not self.traffic_flow_result:
-            return self.get_traffic_flow_frame(0, show_trajectories, show_ids)
+            return self.get_traffic_flow_frame(0, show_trajectories, show_ids, show_map)
         total = self.traffic_flow_visualizer.get_frame_count()
         new_idx = min(total - 1, current_idx + 1)
-        return self.get_traffic_flow_frame(new_idx, show_trajectories, show_ids)
+        return self.get_traffic_flow_frame(new_idx, show_trajectories, show_ids, show_map)
 
-    def traffic_flow_last_frame(self, show_trajectories: bool, show_ids: bool):
+    def traffic_flow_last_frame(self, show_trajectories: bool, show_ids: bool, show_map: bool = True):
         """跳转到最后一帧"""
         if not self.traffic_flow_result:
-            return self.get_traffic_flow_frame(0, show_trajectories, show_ids)
+            return self.get_traffic_flow_frame(0, show_trajectories, show_ids, show_map)
         total = self.traffic_flow_visualizer.get_frame_count()
-        return self.get_traffic_flow_frame(total - 1, show_trajectories, show_ids)
+        return self.get_traffic_flow_frame(total - 1, show_trajectories, show_ids, show_map)
 
     def get_traffic_flow_summary_text(self):
         """获取交通流摘要文本"""
@@ -877,14 +994,34 @@ def create_ui():
 
                         with gr.Row():
                             provider = gr.Dropdown(
-                                choices=["deepseek", "anthropic", "openai"],
+                                choices=["deepseek", "anthropic", "openai", "qwen_local", "gemma4_local"],
                                 value=settings.llm_provider,
                                 label="LLM 提供商"
                             )
                             api_key = gr.Textbox(
                                 label="API Key",
                                 type="password",
-                                placeholder="可选"
+                                placeholder="本地模型无需API Key"
+                            )
+
+                        # 本地模型配置（仅当选择本地模型时显示）
+                        with gr.Row(visible=False) as local_model_config:
+                            local_port = gr.Number(
+                                label="服务端口",
+                                value=8000 if settings.llm_provider in ["qwen", "qwen_local"] else 8001,
+                                precision=0
+                            )
+                            gguf_select = gr.Dropdown(
+                                label="GGUF模型文件（Gemma4）",
+                                choices=[
+                                    "gemma-4-31B-it-Q4_K_M.gguf",
+                                    "gemma-4-31B-it-Q4_0.gguf",
+                                    "gemma-4-31B-it-Q5_K_S.gguf",
+                                    "gemma-4-31B-it-Q6_K.gguf",
+                                    "gemma-4-31B-it-Q8_0.gguf",
+                                ],
+                                value="gemma-4-31B-it-Q4_K_M.gguf",
+                                visible=False
                             )
 
                         chatbot = gr.Chatbot(label="对话", height=500)
@@ -918,6 +1055,7 @@ def create_ui():
                         gr.Markdown("#### 显示选项")
                         tf_show_trajectories = gr.Checkbox(label="显示轨迹", value=False)
                         tf_show_ids = gr.Checkbox(label="显示ID", value=True)
+                        tf_show_map = gr.Checkbox(label="显示地图底图", value=True)
 
                         gr.Markdown("#### 重建摘要")
                         tf_summary = gr.Textbox(label="摘要", interactive=False, lines=5)
@@ -928,17 +1066,21 @@ def create_ui():
 
                         # 帧控制
                         with gr.Row():
-                            tf_first_btn = gr.Button("⏮️", elem_id="tf-first-btn")
-                            tf_prev_btn = gr.Button("⏪", elem_id="tf-prev-btn")
-                            tf_play_btn = gr.Button("▶️", elem_id="tf-play-btn")
-                            tf_next_btn = gr.Button("⏭️", elem_id="tf-next-btn")
-                            tf_last_btn = gr.Button("⏭️", elem_id="tf-last-btn")
+                            tf_first_btn = gr.Button("⏮️", elem_id="tf-first-btn", min_width=60)
+                            tf_prev_btn = gr.Button("⏪", elem_id="tf-prev-btn", min_width=60)
+                            tf_play_btn = gr.Button("▶️ 播放", elem_id="tf-play-btn", variant="secondary", min_width=80)
+                            tf_next_btn = gr.Button("⏭️", elem_id="tf-next-btn", min_width=60)
+                            tf_last_btn = gr.Button("⏭️", elem_id="tf-last-btn", min_width=60)
 
                         tf_frame_slider = gr.Slider(
                             minimum=0, maximum=100, value=0, step=1,
                             label="帧选择"
                         )
                         tf_frame_info = gr.Textbox(label="帧信息", interactive=False)
+
+                # 播放定时器
+                tf_play_timer = gr.Timer(value=0.1, active=False)
+                tf_playing_state = gr.State(value=False)  # 播放状态
 
         # 事件
         def update_map(cx, cy, z, sl, sc):
@@ -993,6 +1135,21 @@ def create_ui():
             outputs=map_plot
         )
 
+        # Provider 选择变化 - 显示/隐藏本地模型配置
+        def on_provider_change(provider_val):
+            if provider_val in ["qwen_local", "qwen"]:
+                return gr.update(visible=True), gr.update(value=8000), gr.update(visible=False)
+            elif provider_val in ["gemma4_local", "gemma4"]:
+                return gr.update(visible=True), gr.update(value=8001), gr.update(visible=True)
+            else:
+                return gr.update(visible=False), gr.update(), gr.update(visible=False)
+
+        provider.change(
+            fn=on_provider_change,
+            inputs=[provider],
+            outputs=[local_model_config, local_port, gguf_select]
+        )
+
         show_lanes.change(fn=update_map, inputs=[center_x, center_y, zoom, show_lanes, show_centerlines], outputs=map_plot)
         show_centerlines.change(fn=update_map, inputs=[center_x, center_y, zoom, show_lanes, show_centerlines], outputs=map_plot)
 
@@ -1032,7 +1189,7 @@ def create_ui():
         # 发送消息后更新地图（显示路径）
         send_btn.click(
             fn=ui.chat,
-            inputs=[user_input, provider, api_key, chatbot],
+            inputs=[user_input, provider, api_key, chatbot, local_port, gguf_select],
             outputs=[chatbot, user_input]
         ).then(
             fn=update_map,
@@ -1042,7 +1199,7 @@ def create_ui():
 
         user_input.submit(
             fn=ui.chat,
-            inputs=[user_input, provider, api_key, chatbot],
+            inputs=[user_input, provider, api_key, chatbot, local_port, gguf_select],
             outputs=[chatbot, user_input]
         ).then(
             fn=update_map,
@@ -1059,80 +1216,120 @@ def create_ui():
             result, msg = ui.reconstruct_traffic_flow(path, int(start), int(end))
             if result:
                 total = ui.traffic_flow_visualizer.get_frame_count()
-                fig, _, _ = ui.get_traffic_flow_frame(0, False, True)
+                fig, _, _ = ui.get_traffic_flow_frame(0, False, True, True)
                 summary = ui.get_traffic_flow_summary_text()
-                return fig, msg, summary, gr.update(maximum=total-1, value=0), f"帧 0 / {total-1}"
-            return None, msg, "", gr.update(), ""
+                return fig, msg, summary, gr.update(maximum=total-1, value=0), f"帧 0 / {total-1}", False
+            return None, msg, "", gr.update(), "", False
 
-        def on_slider_change(idx, show_traj, show_ids):
-            fig, new_idx, max_idx = ui.get_traffic_flow_frame(int(idx), show_traj, show_ids)
+        def on_slider_change(idx, show_traj, show_ids, show_map):
+            fig, new_idx, max_idx = ui.get_traffic_flow_frame(int(idx), show_traj, show_ids, show_map)
             return fig, f"帧 {new_idx} / {max_idx}"
 
-        def on_first(show_traj, show_ids):
-            fig, idx, max_idx = ui.traffic_flow_first_frame(show_traj, show_ids)
+        def on_first(show_traj, show_ids, show_map):
+            fig, idx, max_idx = ui.traffic_flow_first_frame(show_traj, show_ids, show_map)
             return fig, idx, f"帧 {idx} / {max_idx}"
 
-        def on_prev(idx, show_traj, show_ids):
-            fig, new_idx, max_idx = ui.traffic_flow_prev_frame(int(idx), show_traj, show_ids)
+        def on_prev(idx, show_traj, show_ids, show_map):
+            fig, new_idx, max_idx = ui.traffic_flow_prev_frame(int(idx), show_traj, show_ids, show_map)
             return fig, new_idx, f"帧 {new_idx} / {max_idx}"
 
-        def on_next(idx, show_traj, show_ids):
-            fig, new_idx, max_idx = ui.traffic_flow_next_frame(int(idx), show_traj, show_ids)
+        def on_next(idx, show_traj, show_ids, show_map):
+            fig, new_idx, max_idx = ui.traffic_flow_next_frame(int(idx), show_traj, show_ids, show_map)
             return fig, new_idx, f"帧 {new_idx} / {max_idx}"
 
-        def on_last(show_traj, show_ids):
-            fig, idx, max_idx = ui.traffic_flow_last_frame(show_traj, show_ids)
+        def on_last(show_traj, show_ids, show_map):
+            fig, idx, max_idx = ui.traffic_flow_last_frame(show_traj, show_ids, show_map)
             return fig, idx, f"帧 {idx} / {max_idx}"
+
+        def toggle_play(is_playing, idx, show_traj, show_ids, show_map):
+            """切换播放状态"""
+            new_playing = not is_playing
+            btn_text = "⏸️ 暂停" if new_playing else "▶️ 播放"
+            btn_variant = "primary" if new_playing else "secondary"
+            return new_playing, gr.update(value=btn_text, variant=btn_variant), gr.update(active=new_playing)
+
+        def on_timer_tick(idx, show_traj, show_ids, show_map):
+            """定时器回调：播放下一帧"""
+            if not ui.traffic_flow_result:
+                return idx, gr.update(), f"帧 0 / 0"
+
+            total = ui.traffic_flow_visualizer.get_frame_count()
+            new_idx = idx + 1
+            if new_idx >= total:
+                new_idx = 0  # 循环播放
+
+            fig, _, max_idx = ui.get_traffic_flow_frame(new_idx, show_traj, show_ids, show_map)
+            return new_idx, fig, f"帧 {new_idx} / {max_idx}"
 
         # 重建按钮
         tf_reconstruct_btn.click(
             fn=do_reconstruct,
             inputs=[tf_detection_path, tf_start_frame, tf_end_frame],
-            outputs=[tf_plot, tf_status, tf_summary, tf_frame_slider, tf_frame_info]
+            outputs=[tf_plot, tf_status, tf_summary, tf_frame_slider, tf_frame_info, tf_playing_state]
         )
 
         # 帧滑块
         tf_frame_slider.change(
             fn=on_slider_change,
-            inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids],
+            inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids, tf_show_map],
             outputs=[tf_plot, tf_frame_info]
         )
 
         # 播放控制按钮
         tf_first_btn.click(
             fn=on_first,
-            inputs=[tf_show_trajectories, tf_show_ids],
+            inputs=[tf_show_trajectories, tf_show_ids, tf_show_map],
             outputs=[tf_plot, tf_frame_slider, tf_frame_info]
         )
 
         tf_prev_btn.click(
             fn=on_prev,
-            inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids],
+            inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids, tf_show_map],
             outputs=[tf_plot, tf_frame_slider, tf_frame_info]
+        )
+
+        # 播放按钮
+        tf_play_btn.click(
+            fn=toggle_play,
+            inputs=[tf_playing_state, tf_frame_slider, tf_show_trajectories, tf_show_ids, tf_show_map],
+            outputs=[tf_playing_state, tf_play_btn, tf_play_timer]
+        )
+
+        # 定时器回调
+        tf_play_timer.tick(
+            fn=on_timer_tick,
+            inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids, tf_show_map],
+            outputs=[tf_frame_slider, tf_plot, tf_frame_info]
         )
 
         tf_next_btn.click(
             fn=on_next,
-            inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids],
+            inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids, tf_show_map],
             outputs=[tf_plot, tf_frame_slider, tf_frame_info]
         )
 
         tf_last_btn.click(
             fn=on_last,
-            inputs=[tf_show_trajectories, tf_show_ids],
+            inputs=[tf_show_trajectories, tf_show_ids, tf_show_map],
             outputs=[tf_plot, tf_frame_slider, tf_frame_info]
         )
 
         # 显示选项变化时更新
         tf_show_trajectories.change(
             fn=on_slider_change,
-            inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids],
+            inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids, tf_show_map],
             outputs=[tf_plot, tf_frame_info]
         )
 
         tf_show_ids.change(
             fn=on_slider_change,
-            inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids],
+            inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids, tf_show_map],
+            outputs=[tf_plot, tf_frame_info]
+        )
+
+        tf_show_map.change(
+            fn=on_slider_change,
+            inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids, tf_show_map],
             outputs=[tf_plot, tf_frame_info]
         )
 

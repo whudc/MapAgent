@@ -250,7 +250,8 @@ class MasterAgent:
                     "properties": {
                         "start_frame": {"type": "integer", "description": "起始帧ID"},
                         "end_frame": {"type": "integer", "description": "结束帧ID"},
-                        "use_llm": {"type": "boolean", "description": "是否使用LLM补充推理"}
+                        "max_distance": {"type": "number", "description": "最大匹配距离(米)", "default": 5.0},
+                        "max_velocity": {"type": "number", "description": "最大速度(m/s)", "default": 30.0}
                     }
                 }
             },
@@ -287,7 +288,7 @@ class MasterAgent:
 
     def _execute_tool(self, name: str, args: Dict) -> Any:
         """执行工具调用"""
-        # 懒加载 TrafficFlowAgent
+        # 懒加载 TrafficFlowAgent（支持 LLM 增强模式）
         if name in ["load_detection_results", "reconstruct_traffic_flow",
                     "get_trajectory_by_id", "save_reconstruction_result",
                     "get_traffic_flow_summary", "analyze_vehicle_behavior"]:
@@ -295,7 +296,9 @@ class MasterAgent:
                 from agents.base import AgentContext
                 from agents.traffic_flow import TrafficFlowAgent
                 context = AgentContext(map_api=self.map_api, llm_client=self.llm_client)
-                self._traffic_flow_agent = TrafficFlowAgent(context)
+                # 根据是否配置 LLM 客户端决定是否启用 LLM 优化
+                use_llm = self.llm_client is not None
+                self._traffic_flow_agent = TrafficFlowAgent(context, use_llm=use_llm)
 
         try:
             if name == "get_lane_info":
@@ -337,7 +340,8 @@ class MasterAgent:
                 return self._traffic_flow_agent._reconstruct_traffic_flow(
                     args.get("start_frame"),
                     args.get("end_frame"),
-                    args.get("use_llm", True)
+                    max_distance=args.get("max_distance", 5.0),
+                    max_velocity=args.get("max_velocity", 30.0),
                 )
             elif name == "get_trajectory_by_id":
                 return self._traffic_flow_agent._get_trajectory_by_id(args["vehicle_id"])
@@ -457,6 +461,10 @@ def create_master_agent(
         "deepseek": "deepseek",
         "openai": "openai",
         "local": "local",
+        "qwen": "qwen_local",
+        "qwen_local": "qwen_local",
+        "gemma4": "gemma4_local",
+        "gemma4_local": "gemma4_local",
     }
 
     # 获取 LLM 配置（优先参数，其次 settings，最后环境变量）
@@ -474,10 +482,12 @@ def create_master_agent(
         else:
             model = os.getenv("LLM_MODEL", "")
 
-    # 获取 API Key
+    # 获取 API Key（本地模型使用 dummy key）
     resolved_api_key = api_key
     if not resolved_api_key:
-        if use_settings and settings and settings.llm_api_key:
+        if provider in ["qwen_local", "gemma4_local", "local"]:
+            resolved_api_key = "dummy"
+        elif use_settings and settings and settings.llm_api_key:
             resolved_api_key = settings.llm_api_key
         elif provider == "anthropic":
             resolved_api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -488,7 +498,13 @@ def create_master_agent(
 
     # 获取 base_url
     base_url = None
-    if use_settings and settings and settings.llm_base_url:
+    if provider == "qwen_local":
+        base_url = os.getenv("QWEN_BASE_URL", "http://localhost:8000/v1")
+    elif provider == "gemma4_local":
+        base_url = os.getenv("GEMMA4_BASE_URL", "http://localhost:8001/v1")
+    elif provider == "local":
+        base_url = os.getenv("LLM_BASE_URL", "http://localhost:8000/v1")
+    elif use_settings and settings and settings.llm_base_url:
         base_url = settings.llm_base_url
     else:
         base_url = os.getenv("LLM_BASE_URL")
@@ -497,7 +513,7 @@ def create_master_agent(
 
     # 创建 LLM 客户端（如果没有 API Key，则创建不带 LLM 的 Agent）
     llm_client = None
-    if resolved_api_key or provider == "local":
+    if resolved_api_key or provider in ["local", "qwen_local", "gemma4_local"]:
         config = LLMConfig(
             provider=provider,
             model=model,

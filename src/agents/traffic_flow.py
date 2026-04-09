@@ -661,7 +661,10 @@ class LLMOptimizer:
                 "track_id": track_id
             })
 
+            print(f"[DEBUG] Calling LLM for track {track_id}...")
             response = self.llm_client.chat_simple(prompt)
+            print(f"[DEBUG] LLM response received for track {track_id}: {response[:100] if response else 'EMPTY'}")
+
             result = self._parse_llm_response(response)
 
             self._notify_progress("id_analysis_result", {
@@ -672,9 +675,10 @@ class LLMOptimizer:
         except Exception as e:
             import traceback
             error_detail = f"{str(e)}\n{traceback.format_exc()}"
+            print(f"[ERROR] LLM call failed for track {track_id}: {error_detail}")
             self._notify_progress("id_analysis_error", {
                 "track_id": track_id,
-                "error": error_detail
+                "error": error_detail[:500]  # 只发送前 500 字符
             })
             result = self._rule_based_id_judge(track_history, recent_detections)
 
@@ -986,6 +990,7 @@ class TrafficFlowAgent(BaseAgent):
                 "total_frames": len(frames),
                 "total_vehicles": len(self._trajectories),
                 "saved_to": output_path,
+                "statistics": recon_result.get('statistics', {}),  # 添加统计信息
             }
 
         return {

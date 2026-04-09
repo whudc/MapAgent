@@ -28,11 +28,13 @@ from config import settings
 
 # 车辆类型颜色映射
 VEHICLE_COLORS = {
-    'Car': '#3B82F6',      # 蓝色
-    'Truck': '#EF4444',    # 红色
-    'Bus': '#F59E0B',      # 橙色
+    'Car': '#3B82F6',          # 蓝色
+    'Suv': '#60A5FA',          # 浅蓝色
+    'Truck': '#EF4444',        # 红色
+    'Bus': '#F59E0B',          # 橙色
     'Non_motor_rider': '#10B981',  # 绿色
-    'Unknown': '#9CA3AF',  # 灰色
+    'Pedestrian': '#8B5CF6',   # 紫色
+    'Unknown': '#9CA3AF',      # 灰色
 }
 
 
@@ -77,6 +79,132 @@ class TrafficFlowVisualizer:
     def is_playing(self) -> bool:
         """是否正在播放"""
         return self._is_playing
+
+    def draw_animation(self, show_trajectories: bool = False,
+                       show_ids: bool = True,
+                       show_map: bool = True) -> go.Figure:
+        """绘制动画（使用 Plotly 的 frames 功能实现前端动画）"""
+        if not self._frames:
+            fig = go.Figure()
+            fig.add_annotation(text="无数据", x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False)
+            return fig
+
+        # 计算所有帧的视图范围
+        all_x, all_y = [], []
+        for frame in self._frames:
+            for v in frame.get('vehicles', []):
+                pos = v.get('position', [0, 0, 0])
+                all_x.append(pos[0])
+                all_y.append(pos[1])
+
+        if all_x:
+            margin = 50
+            x_range = (min(all_x) - margin, max(all_x) + margin)
+            y_range = (min(all_y) - margin, max(all_y) + margin)
+        else:
+            x_range, y_range = (0, 100), (0, 100)
+
+        # 创建基础图形和初始数据
+        fig = go.Figure()
+
+        # 绘制地图底图（只绘制一次，作为背景）
+        if show_map and self._map_visualizer:
+            self._draw_map_background(fig, x_range, y_range)
+
+        # 为每一帧创建 frame
+        frames = []
+        # 初始化第一帧的数据
+        init_traces = []
+
+        for i, frame in enumerate(self._frames):
+            vehicles = frame.get('vehicles', [])
+            frame_traces = []
+
+            # 绘制车辆
+            for v_type in ['Car', 'Truck', 'Bus', 'Non_motor_rider', 'Unknown']:
+                type_vehicles = [v for v in vehicles if v.get('vehicle_type', 'Unknown') == v_type]
+                if not type_vehicles:
+                    continue
+
+                color = VEHICLE_COLORS.get(v_type, VEHICLE_COLORS['Unknown'])
+
+                # 批量绘制同类型车辆
+                x_coords = [v['position'][0] for v in type_vehicles]
+                y_coords = [v['position'][1] for v in type_vehicles]
+                hover_texts = [f'<b>ID: {v["vehicle_id"]}</b><br>类型：{v_type}<br>位置：({v["position"][0]:.1f}, {v["position"][1]:.1f})' for v in type_vehicles]
+
+                trace = go.Scatter(
+                    x=x_coords, y=y_coords,
+                    mode='markers+text' if show_ids else 'markers',
+                    marker=dict(size=15, color=color, symbol='circle', line=dict(width=2, color='white')),
+                    text=[str(v['vehicle_id']) for v in type_vehicles] if show_ids else None,
+                    textposition='top center',
+                    textfont=dict(size=10, color=color),
+                    hovertemplate='%{hovertext}<extra></extra>',
+                    hovertext=hover_texts,
+                    name=f'{v_type}'
+                )
+                frame_traces.append(trace)
+
+                # 第一帧同时添加到初始数据
+                if i == 0:
+                    init_traces.append(trace)
+
+            frames.append(go.Frame(
+                data=frame_traces,
+                name=str(i),
+                layout=dict(
+                    title=f"帧 {frame.get('frame_id', i)} | 车辆数：{len(vehicles)}",
+                    xaxis=dict(range=x_range, scaleratio=1),
+                    yaxis=dict(range=y_range, scaleratio=1)
+                )
+            ))
+
+        # 设置初始数据（第一帧或空数据）
+        if init_traces:
+            for trace in init_traces:
+                fig.add_trace(trace)
+        elif show_map and self._map_visualizer:
+            # 如果没有车辆但有地图，保持地图数据
+            pass
+        else:
+            # 完全空数据，添加一个空 scatter
+            fig.add_trace(go.Scatter(x=[], y=[], mode='markers', marker=dict(size=1)))
+
+        # 添加所有帧
+        fig.frames = frames
+
+        # 配置动画播放按钮
+        fig.update_layout(
+            updatemenus=[dict(
+                type='buttons',
+                showactive=False,
+                buttons=[
+                    dict(label='▶️ 播放',
+                         method='animate',
+                         args=[None, {'frame': {'duration': 200, 'redraw': True},
+                                      'fromcurrent': True, 'transition': {'duration': 0}}]),
+                    dict(label='⏸️ 暂停',
+                         method='animate',
+                         args=[[None], {'frame': {'duration': 0, 'redraw': False},
+                                        'mode': 'immediate', 'transition': {'duration': 0}}])
+                ],
+                direction='left',
+                pad=dict(r=10, t=75),
+                x=0.1, y=0.95
+            )],
+            title=dict(text="交通流动画", x=0.5),
+            xaxis=dict(range=x_range, scaleratio=1),
+            yaxis=dict(range=y_range, scaleratio=1),
+            plot_bgcolor='#f5f5f5',
+            margin=dict(l=0, r=0, t=80, b=0),
+            height=600,
+            dragmode='pan',
+        )
+        fig.update_xaxes(showgrid=True, gridcolor='lightgray')
+        fig.update_yaxes(showgrid=True, gridcolor='lightgray')
+
+        return fig
 
     def draw_frame(self, frame_idx: int = None,
                    show_trajectories: bool = False,
@@ -261,7 +389,7 @@ class FastMapVisualizer:
         """预构建数据缓存
 
         注意: 地图数据存在 Y 坐标符号问题（原始存储为负值，实际应为正值）。
-        这里对 Y 坐标进行符号翻转，使其与检测结果（json_results）的坐标系对齐。
+        不需要进行坐标变换。
         """
         self._cache = {
             'lanes': {},
@@ -282,32 +410,30 @@ class FastMapVisualizer:
             'no_lane': '#FFFFFF',
         }
 
-        # 缓存车道（修正 Y 坐标符号）
+        # 缓存车道（不翻转 Y 坐标，地图和检测使用相同坐标系）
         for lane_id, lane in self.map_api.map.lane_lines.items():
             coords = np.array(lane.coordinates)
             if len(coords.shape) == 1:
                 coords = coords.reshape(1, -1)
             if len(coords) >= 2:
-                # Y 坐标符号翻转：地图存储为负值，实际应为正值
-                y_coords = -coords[:, 1]  # 翻转 Y 符号
+                # 直接使用原始坐标，不翻转
                 self._cache['lanes'][lane_id] = {
                     'x': coords[:, 0].tolist(),
-                    'y': y_coords.tolist(),
+                    'y': coords[:, 1].tolist(),
                     'type': lane.type,
                     'color': lane_colors.get(lane.type, '#CCCCCC')
                 }
 
-        # 缓存中心线（修正 Y 坐标符号）
+        # 缓存中心线（不翻转 Y 坐标，地图和检测使用相同坐标系）
         for cl_id, cl in self.map_api.map.centerlines.items():
             coords = np.array(cl.coordinates)
             if len(coords.shape) == 1:
                 coords = coords.reshape(1, -1)
             if len(coords) >= 2:
-                # Y 坐标符号翻转
-                y_coords = -coords[:, 1]  # 翻转 Y 符号
+                # 直接使用原始坐标，不翻转
                 self._cache['centerlines'][cl_id] = {
                     'x': coords[:, 0].tolist(),
-                    'y': y_coords.tolist()
+                    'y': coords[:, 1].tolist()
                 }
 
     def draw_map(self, center_x=None, center_y=None, zoom=1.0,
@@ -495,6 +621,10 @@ class MapAgentUI:
         self.traffic_flow_visualizer = TrafficFlowVisualizer()
         self.traffic_flow_result = None
         self.is_playing = False
+        # 显示选项缓存（避免重复绘制）
+        self._last_show_traj = False
+        self._last_show_ids = True
+        self._last_show_map = True
         # 预初始化 Agent
         self._pre_init_agent()
 
@@ -1068,7 +1198,6 @@ def create_ui():
                         with gr.Row():
                             tf_first_btn = gr.Button("⏮️", elem_id="tf-first-btn", min_width=60)
                             tf_prev_btn = gr.Button("⏪", elem_id="tf-prev-btn", min_width=60)
-                            tf_play_btn = gr.Button("▶️ 播放", elem_id="tf-play-btn", variant="secondary", min_width=80)
                             tf_next_btn = gr.Button("⏭️", elem_id="tf-next-btn", min_width=60)
                             tf_last_btn = gr.Button("⏭️", elem_id="tf-last-btn", min_width=60)
 
@@ -1077,10 +1206,6 @@ def create_ui():
                             label="帧选择"
                         )
                         tf_frame_info = gr.Textbox(label="帧信息", interactive=False)
-
-                # 播放定时器
-                tf_play_timer = gr.Timer(value=0.1, active=False)
-                tf_playing_state = gr.State(value=False)  # 播放状态
 
         # 事件
         def update_map(cx, cy, z, sl, sc):
@@ -1216,13 +1341,26 @@ def create_ui():
             result, msg = ui.reconstruct_traffic_flow(path, int(start), int(end))
             if result:
                 total = ui.traffic_flow_visualizer.get_frame_count()
-                fig, _, _ = ui.get_traffic_flow_frame(0, False, True, True)
+                # 使用动画绘制（Plotly 前端动画）
+                fig = ui.traffic_flow_visualizer.draw_animation(
+                    show_trajectories=False,
+                    show_ids=True,
+                    show_map=True
+                )
                 summary = ui.get_traffic_flow_summary_text()
-                return fig, msg, summary, gr.update(maximum=total-1, value=0), f"帧 0 / {total-1}", False
+                return fig, msg, summary, gr.update(maximum=total-1, value=0), f"帧 0 / {total-1}"
             return None, msg, "", gr.update(), "", False
 
         def on_slider_change(idx, show_traj, show_ids, show_map):
-            fig, new_idx, max_idx = ui.get_traffic_flow_frame(int(idx), show_traj, show_ids, show_map)
+            """滑块变化时更新画面"""
+            idx = int(idx)
+
+            # 更新缓存参数
+            ui._last_show_traj = show_traj
+            ui._last_show_ids = show_ids
+            ui._last_show_map = show_map
+
+            fig, new_idx, max_idx = ui.get_traffic_flow_frame(idx, show_traj, show_ids, show_map)
             return fig, f"帧 {new_idx} / {max_idx}"
 
         def on_first(show_traj, show_ids, show_map):
@@ -1241,31 +1379,11 @@ def create_ui():
             fig, idx, max_idx = ui.traffic_flow_last_frame(show_traj, show_ids, show_map)
             return fig, idx, f"帧 {idx} / {max_idx}"
 
-        def toggle_play(is_playing, idx, show_traj, show_ids, show_map):
-            """切换播放状态"""
-            new_playing = not is_playing
-            btn_text = "⏸️ 暂停" if new_playing else "▶️ 播放"
-            btn_variant = "primary" if new_playing else "secondary"
-            return new_playing, gr.update(value=btn_text, variant=btn_variant), gr.update(active=new_playing)
-
-        def on_timer_tick(idx, show_traj, show_ids, show_map):
-            """定时器回调：播放下一帧"""
-            if not ui.traffic_flow_result:
-                return idx, gr.update(), f"帧 0 / 0"
-
-            total = ui.traffic_flow_visualizer.get_frame_count()
-            new_idx = idx + 1
-            if new_idx >= total:
-                new_idx = 0  # 循环播放
-
-            fig, _, max_idx = ui.get_traffic_flow_frame(new_idx, show_traj, show_ids, show_map)
-            return new_idx, fig, f"帧 {new_idx} / {max_idx}"
-
         # 重建按钮
         tf_reconstruct_btn.click(
             fn=do_reconstruct,
             inputs=[tf_detection_path, tf_start_frame, tf_end_frame],
-            outputs=[tf_plot, tf_status, tf_summary, tf_frame_slider, tf_frame_info, tf_playing_state]
+            outputs=[tf_plot, tf_status, tf_summary, tf_frame_slider, tf_frame_info]
         )
 
         # 帧滑块
@@ -1286,20 +1404,6 @@ def create_ui():
             fn=on_prev,
             inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids, tf_show_map],
             outputs=[tf_plot, tf_frame_slider, tf_frame_info]
-        )
-
-        # 播放按钮
-        tf_play_btn.click(
-            fn=toggle_play,
-            inputs=[tf_playing_state, tf_frame_slider, tf_show_trajectories, tf_show_ids, tf_show_map],
-            outputs=[tf_playing_state, tf_play_btn, tf_play_timer]
-        )
-
-        # 定时器回调
-        tf_play_timer.tick(
-            fn=on_timer_tick,
-            inputs=[tf_frame_slider, tf_show_trajectories, tf_show_ids, tf_show_map],
-            outputs=[tf_frame_slider, tf_plot, tf_frame_info]
         )
 
         tf_next_btn.click(

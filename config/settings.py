@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # LLM 配置
     llm_provider: str = "deepseek"
     llm_model: str = "deepseek-chat"  # deepseek-chat 或 deepseek-reasoner
-    llm_api_key: Optional[str] = "sk-96f9b91a59b749b68dafb650f6966e8b"  # 从环境变量读取
+    llm_api_key: Optional[str] = "sk-96f9b91a59b749b68dafb650f6966e8b" 
     llm_base_url: Optional[str] = "https://api.deepseek.com"
     llm_max_tokens: int = 4096
     llm_temperature: float = 0.7

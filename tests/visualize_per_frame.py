@@ -119,7 +119,8 @@ def draw_map(ax, map_api: Optional[MapAPI], x_range: tuple = None, y_range: tupl
 
 
 def draw_objects(ax, objects, map_api: Optional[MapAPI], show_id: bool = True,
-                 title: str = "", x_range: tuple = None, y_range: tuple = None):
+                 title: str = "", x_range: tuple = None, y_range: tuple = None,
+                 prev_frame_objects: Optional[List[Dict]] = None):
     """
     在轴上绘制目标和地图
 
@@ -131,6 +132,7 @@ def draw_objects(ax, objects, map_api: Optional[MapAPI], show_id: bool = True,
         title: 子图标题
         x_range: X 轴范围
         y_range: Y 轴范围
+        prev_frame_objects: 前一帧的目标列表（用于计算运动方向）
     """
     ax.clear()
     ax.set_title(title, fontsize=12, fontweight='bold')
@@ -149,6 +151,16 @@ def draw_objects(ax, objects, map_api: Optional[MapAPI], show_id: bool = True,
     all_x = []
     all_y = []
 
+    # 构建前一帧位置字典（用于计算运动方向）
+    prev_positions = {}
+    if prev_frame_objects:
+        for obj in prev_frame_objects:
+            pos = obj.get('location') or obj.get('position')
+            if pos is not None:
+                oid = obj.get('id')
+                if oid is not None:
+                    prev_positions[oid] = np.array(pos[:2])
+
     for obj in objects:
         pos = obj.get('location') or obj.get('position')
         if pos is None:
@@ -158,17 +170,37 @@ def draw_objects(ax, objects, map_api: Optional[MapAPI], show_id: bool = True,
         all_x.append(x)
         all_y.append(y)
 
-        # 获取车辆尺寸和航向角
+        # 获取车辆尺寸
         size = obj.get('size')
         if size is None:
             size = get_vehicle_size(obj.get('type', 'Unknown'))
 
-        heading = obj.get('heading', 0.0)
         obj_type = obj.get('type', 'Unknown')
         color = get_vehicle_color(obj_type)
+        oid = obj.get('id')
+
+        # 使用速度方向计算 heading
+        # 检测数据中的 heading 可能不可靠，使用 velocity 计算运动方向
+        vx, vy = 0, 0
+        vel = obj.get('velocity')
+        if vel:
+            # 支持字典和列表两种格式
+            if isinstance(vel, dict):
+                vx = vel.get('vx', 0)
+                vy = vel.get('vy', 0)
+            elif isinstance(vel, (list, tuple)) and len(vel) >= 2:
+                vx, vy = vel[0], vel[1]
+
+        if abs(vx) > 0.1 or abs(vy) > 0.1:
+            heading = np.arctan2(vy, vx)
+        else:
+            # 没有速度信息时使用 heading
+            heading = obj.get('heading', 0.0)
 
         # 绘制矩形表示车辆
         length, width = size[0], size[1]
+
+        # 创建矩形，旋转中心在矩形中心
         rect = Rectangle(
             (x - length/2, y - width/2),
             length, width,
@@ -176,21 +208,20 @@ def draw_objects(ax, objects, map_api: Optional[MapAPI], show_id: bool = True,
             fill=False,
             edgecolor=color,
             linewidth=2,
-            label=obj_type
         )
         ax.add_patch(rect)
 
         # 绘制中心点
         ax.plot(x, y, 'o', color=color, markersize=6)
 
-        # 绘制航向线
-        end_x = x + np.cos(heading) * length
-        end_y = y + np.sin(heading) * width
+        # 绘制航向线（使用长度方向的 1.5 倍）
+        end_x = x + np.cos(heading) * length * 1.5
+        end_y = y + np.sin(heading) * length * 1.5
         ax.plot([x, end_x], [y, end_y], '-', color=color, linewidth=2)
 
         # 显示 ID
-        if show_id and 'id' in obj:
-            ax.text(x, y + 1, f"#{obj['id']}",
+        if show_id and oid is not None:
+            ax.text(x, y + 1, f"#{oid}",
                    ha='center', va='bottom', fontsize=9,
                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
 
@@ -336,6 +367,7 @@ def create_frame_range_visualization(all_frames: List, all_tracks: Dict,
                 'size': d.get('size', get_vehicle_size(d['type'])),
                 'heading': d.get('heading', 0.0),
                 'type': d['type'],
+                'velocity': d.get('velocity', [0, 0, 0]),
             })
 
         # 获取跟踪结果

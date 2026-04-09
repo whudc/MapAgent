@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MapAgent v2.1</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="app-container">
+        <!-- 顶部导航栏 -->
+        <header class="header">
+            <h1>🗺️ MapAgent</h1>
+            <div class="header-controls">
+                <div class="stat-item">
+                    <span class="stat-label">帧数:</span>
+                    <span class="stat-value" id="frame-count">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">当前帧:</span>
+                    <span class="stat-value" id="current-frame">0</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">车辆数:</span>
+                    <span class="stat-value" id="vehicle-count">0</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- 主内容区 - 左右分栏布局 -->
+        <main class="main-content split-layout">
+            <!-- 左侧：可视化区域 + 底部控制面板 -->
+            <div class="left-panel">
+                <!-- 可视化区域 -->
+                <div class="visualization-area">
+                    <div id="canvas-container" class="canvas-container">
+                        <canvas id="map-canvas"></canvas>
+                        <canvas id="trajectory-canvas"></canvas>
+                        <canvas id="vehicle-canvas"></canvas>
+                        <div id="loading-overlay" class="loading-overlay hidden">
+                            <div class="spinner"></div>
+                            <p>加载中...</p>
+                        </div>
+                    </div>
+                    <!-- 图例 -->
+                    <div id="legend" class="legend">
+                        <h4>图例</h4>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #3B82F6;"></span>
+                            <span>Car</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #60A5FA;"></span>
+                            <span>Suv</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #EF4444;"></span>
+                            <span>Truck</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #F59E0B;"></span>
+                            <span>Bus</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #10B981;"></span>
+                            <span>Non-motor</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #8B5CF6;"></span>
+                            <span>Pedestrian</span>
+                        </div>
+                        <div class="legend-item">
+                            <span class="legend-color" style="background: #9CA3AF;"></span>
+                            <span>Unknown</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 底部控制面板 -->
+                <aside class="bottom-control-panel">
+                    <div class="panel-tabs">
+                        <button class="tab-btn active" data-tab="playback-tab">▶️ 播放控制</button>
+                        <button class="tab-btn" data-tab="path-tab">📍 路径规划</button>
+                        <button class="tab-btn" data-tab="display-tab">👁️ 显示选项</button>
+                        <button class="tab-btn" data-tab="view-tab">🔍 视图控制</button>
+                        <button class="tab-btn" data-tab="layers-tab">🗺️ 车道图层</button>
+                        <button class="tab-btn" data-tab="objects-tab">🎯 目标类型</button>
+                    </div>
+
+                    <!-- 播放控制 -->
+                    <div class="tab-content active" id="playback-tab">
+                        <div class="control-row compact">
+                            <div class="playback-controls">
+                                <button id="btn-first" class="btn btn-icon" title="第一帧">⏮️</button>
+                                <button id="btn-prev" class="btn btn-icon" title="上一帧">⏪</button>
+                                <button id="btn-play" class="btn btn-play" title="播放/暂停">▶️</button>
+                                <button id="btn-next" class="btn btn-icon" title="下一帧">⏭️</button>
+                                <button id="btn-last" class="btn btn-icon" title="最后一帧">⏯️</button>
+                            </div>
+                            <div class="slider-group">
+                                <label>帧：<span id="current-frame-label">0</span>/<span id="total-frames">0</span></label>
+                                <input type="range" id="frame-slider" min="0" max="100" value="0" step="1" class="slider-sm">
+                            </div>
+                            <div class="slider-group" style="min-width: 120px;">
+                                <label>速度：<span id="fps-value">10</span> FPS</label>
+                                <input type="range" id="fps-slider" min="1" max="30" value="10" step="1" class="slider-sm">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 路径规划 -->
+                    <div class="tab-content" id="path-tab">
+                        <div class="control-row compact">
+                            <div class="path-inputs">
+                                <div class="input-group">
+                                    <span class="input-label start-label">起点</span>
+                                    <input type="text" id="start-x" readonly placeholder="X" class="coord-input" style="width: 50px;">
+                                    <input type="text" id="start-y" readonly placeholder="Y" class="coord-input" style="width: 50px;">
+                                </div>
+                                <div class="input-group">
+                                    <span class="input-label end-label">终点</span>
+                                    <input type="text" id="end-x" readonly placeholder="X" class="coord-input" style="width: 50px;">
+                                    <input type="text" id="end-y" readonly placeholder="Y" class="coord-input" style="width: 50px;">
+                                </div>
+                            </div>
+                            <div class="path-buttons">
+                                <button id="set-start-btn" class="btn btn-sm btn-start">🟢 设置起点</button>
+                                <button id="set-end-btn" class="btn btn-sm btn-end">🔴 设置终点</button>
+                                <button id="find-path-btn" class="btn btn-sm btn-primary">🔍 规划</button>
+                                <button id="clear-positions-btn" class="btn btn-sm">🗑️ 清空</button>
+                            </div>
+                            <div id="path-status" class="status-message"></div>
+                        </div>
+                    </div>
+
+                    <!-- 显示选项 -->
+                    <div class="tab-content" id="display-tab">
+                        <div class="control-row">
+                            <div class="checkbox-group horizontal">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="show-map" checked>
+                                    <span>地图底图</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="show-vehicles" checked>
+                                    <span>车辆</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="show-ids" checked>
+                                    <span>车辆 ID</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="show-trajectories">
+                                    <span>轨迹线</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" id="show-trail" checked>
+                                    <span>拖尾</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 视图控制 -->
+                    <div class="tab-content" id="view-tab">
+                        <div class="control-row compact">
+                            <div class="view-buttons">
+                                <button id="btn-zoom-in" class="btn btn-icon" title="放大">➕</button>
+                                <button id="btn-zoom-out" class="btn btn-icon" title="缩小">➖</button>
+                                <button id="btn-reset-view" class="btn btn-sm">🎯 重置</button>
+                            </div>
+                            <div class="slider-group wide">
+                                <label>缩放：<span id="zoom-value">1.0</span>x</label>
+                                <input type="range" id="zoom-slider" min="0.5" max="5" value="1" step="0.1" class="slider-sm">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 车道图层 -->
+                    <div class="tab-content" id="layers-tab">
+                        <div class="control-row">
+                            <div class="checkbox-group horizontal">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" class="lane-type" value="solid" checked>
+                                    <span class="color-dot" style="background: #FFD700"></span>
+                                    <span>实线</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" class="lane-type" value="dashed" checked>
+                                    <span class="color-dot" style="background: #90EE90"></span>
+                                    <span>虚线</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" class="lane-type" value="double_solid" checked>
+                                    <span class="color-dot" style="background: #FF6B6B"></span>
+                                    <span>双实线</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" class="lane-type" value="double_dashed" checked>
+                                    <span class="color-dot" style="background: #87CEEB"></span>
+                                    <span>双虚线</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" class="lane-type" value="bilateral" checked>
+                                    <span class="color-dot" style="background: #DDA0DD"></span>
+                                    <span>双侧线</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" class="lane-type" value="left_dashed_right_solid" checked>
+                                    <span class="color-dot" style="background: #F0E68C"></span>
+                                    <span>左虚右实</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" class="lane-type" value="curb" checked>
+                                    <span class="color-dot" style="background: #808080"></span>
+                                    <span>路缘石</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" class="lane-type" value="fence" checked>
+                                    <span class="color-dot" style="background: #8B4513"></span>
+                                    <span>围栏</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" class="lane-type" value="diversion_boundary" checked>
+                                    <span class="color-dot" style="background: #00CED1"></span>
+                                    <span>导流线</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" class="lane-type" value="centerline" checked>
+                                    <span class="color-dot" style="background: #4169E1"></span>
+                                    <span>中心线</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 目标类型过滤 -->
+                    <div class="tab-content" id="objects-tab">
+                        <div class="control-row">
+                            <div class="checkbox-group horizontal">
+                                <label class="checkbox-label">
+                                    <input type="checkbox" class="object-type" value="Car" checked>
+                                    <span class="color-dot" style="background: #3B82F6"></span>
+                                    <span>Car</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" class="object-type" value="Suv" checked>
+                                    <span class="color-dot" style="background: #60A5FA"></span>
+                                    <span>Suv</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" class="object-type" value="Truck" checked>
+                                    <span class="color-dot" style="background: #EF4444"></span>
+                                    <span>Truck</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" class="object-type" value="Bus" checked>
+                                    <span class="color-dot" style="background: #F59E0B"></span>
+                                    <span>Bus</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" class="object-type" value="Non_motor_rider" checked>
+                                    <span class="color-dot" style="background: #10B981"></span>
+                                    <span>Non-motor</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" class="object-type" value="Pedestrian" checked>
+                                    <span class="color-dot" style="background: #8B5CF6"></span>
+                                    <span>Pedestrian</span>
+                                </label>
+                                <label class="checkbox-label">
+                                    <input type="checkbox" class="object-type" value="Unknown" checked>
+                                    <span class="color-dot" style="background: #9CA3AF"></span>
+                                    <span>Unknown</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 数据加载（固定显示） -->
+                    <div class="data-load-section">
+                        <div class="control-row compact">
+                            <input type="text" id="detection-path" value="data/json_results" placeholder="检测结果目录路径" class="input-sm" style="width: 160px;">
+                            <div class="frame-inputs">
+                                <input type="number" id="start-frame" value="-1" min="-1" placeholder="起始帧" class="input-sm">
+                                <input type="number" id="end-frame" value="-1" min="-1" placeholder="结束帧" class="input-sm">
+                            </div>
+                            <button id="load-map-btn" class="btn btn-sm" style="background: rgba(59, 130, 246, 0.2); color: #3B82F6; border: 1px solid #3B82F6;">🗺️ 加载地图</button>
+                            <button id="load-traffic-btn" class="btn btn-sm" style="background: rgba(16, 185, 129, 0.2); color: #10B981; border: 1px solid #10B981;">🔄 交通流重建</button>
+                            <div id="load-status" class="status-message"></div>
+                        </div>
+                    </div>
+                </aside>
+            </div>
+
+            <!-- 右侧：对话窗口 + LLM 配置 -->
+            <aside class="right-panel chat-sidebar">
+                <div class="chat-container">
+                    <div class="chat-header">
+                        <h3>🤖 智能对话</h3>
+                    </div>
+
+                    <!-- LLM 配置 -->
+                    <div class="llm-config">
+                        <div class="form-group compact">
+                            <label for="llm-provider">LLM 提供商</label>
+                            <select id="llm-provider" class="form-select">
+                                <option value="deepseek">DeepSeek</option>
+                                <option value="anthropic">Anthropic (Claude)</option>
+                                <option value="openai">OpenAI</option>
+                                <option value="qwen">通义千问 (本地)</option>
+                                <option value="gemma4">Gemma4 (本地)</option>
+                            </select>
+                        </div>
+                        <div class="form-group compact">
+                            <label for="llm-api-key">API Key</label>
+                            <input type="password" id="llm-api-key" placeholder="输入 API Key" class="input-sm">
+                        </div>
+                        <div class="form-group compact" id="local-port-group" style="display: none;">
+                            <label for="llm-port">服务端口</label>
+                            <input type="number" id="llm-port" value="8000" placeholder="端口" class="input-sm">
+                        </div>
+                        <!-- LLM 优化选项 -->
+                        <div class="form-group compact" style="margin-top: 8px;">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="use-llm-optimize">
+                                <span>用于交通流重建（车道守恒 + 遮挡分析）</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- 聊天历史 -->
+                    <div id="chat-history" class="chat-history">
+                        <div class="chat-message system">系统已就绪，请输入问题...</div>
+                    </div>
+
+                    <!-- 聊天输入 -->
+                    <div class="chat-input-row">
+                        <textarea id="chat-input" class="chat-input" placeholder="输入问题，按 Enter 发送..." rows="1"></textarea>
+                        <button id="send-chat-btn" class="btn btn-primary">发送</button>
+                    </div>
+                    <button id="clear-chat-btn" class="btn btn-sm btn-full">🗑️ 清空历史</button>
+                </div>
+            </aside>
+        </main>
+    </div>
+
+    <!-- 工具提示 -->
+    <div id="tooltip" class="tooltip hidden"></div>
+
+    <script src="{{ url_for('static', filename='visualizer.js') }}"></script>
+</body>
+</html>
+

@@ -33,11 +33,11 @@ MODEL_PROVIDERS = {
     "deepseek": {"name": "Deepseek", "default_model": "deepseek-chat", "need_key": True},
     "anthropic": {"name": "Anthropic Claude", "default_model": "claude-sonnet-4-6", "need_key": True},
     "openai": {"name": "OpenAI", "default_model": "gpt-4o", "need_key": True},
-    "qwen": {"name": "Qwen (本地)", "default_model": "Qwen3___5-35B-A3B", "need_key": False, "port": 8000},
-    "qwen_local": {"name": "Qwen (本地)", "default_model": "Qwen3___5-35B-A3B", "need_key": False, "port": 8000},
-    "gemma4": {"name": "Gemma4 (本地)", "default_model": "gemma-4-31B-it", "need_key": False, "port": 8001},
-    "gemma4_local": {"name": "Gemma4 (本地)", "default_model": "gemma-4-31B-it", "need_key": False, "port": 8001},
-    "local": {"name": "本地模型", "default_model": "Qwen3___5-35B-A3B", "need_key": False, "port": 8000},
+    "qwen": {"name": "Qwen (本地)", "default_model": "Qwen3_5", "need_key": False, "port": 8000},
+    "qwen_local": {"name": "Qwen (本地)", "default_model": "Qwen3_5", "need_key": False, "port": 8000},
+    "gemma4": {"name": "Gemma4 (本地)", "default_model": "Gemma4", "need_key": False, "port": 8001},
+    "gemma4_local": {"name": "Gemma4 (本地)", "default_model": "Gemma4", "need_key": False, "port": 8001},
+    "local": {"name": "本地模型", "default_model": "Qwen3_5", "need_key": False, "port": 8000},
 }
 
 
@@ -149,15 +149,20 @@ def switch_model(provider: str, map_path: str, api_key: str = None) -> tuple:
     # 设置环境变量
     if not info["need_key"]:
         port = info.get("port", 8000)
+        model_name = info.get("default_model", "Qwen3_5")
         if provider in ["qwen", "qwen_local", "local"]:
             os.environ["QWEN_BASE_URL"] = f"http://localhost:{port}/v1"
+            os.environ["LLM_MODEL"] = model_name
         elif provider in ["gemma4", "gemma4_local"]:
             os.environ["GEMMA4_BASE_URL"] = f"http://localhost:{port}/v1"
+            os.environ["LLM_MODEL"] = model_name
+        os.environ["LLM_PROVIDER"] = provider
 
     try:
         agent = create_master_agent(
             map_file=map_path,
             llm_provider=provider,
+            llm_model=info.get("default_model"),
             api_key=resolved_api_key
         )
         return agent, True, f"已切换到 {info['name']}"

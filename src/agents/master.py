@@ -477,10 +477,10 @@ def create_master_agent(
 
     model = llm_model
     if not model:
-        if use_settings and settings:
+        # 优先使用环境变量（UI 切换模型时会设置）
+        model = os.getenv("LLM_MODEL", "")
+        if not model and use_settings and settings:
             model = settings.llm_model
-        else:
-            model = os.getenv("LLM_MODEL", "")
 
     # 获取 API Key（本地模型使用 dummy key）
     resolved_api_key = api_key

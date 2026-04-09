@@ -1,8 +1,7 @@
 .vscode/
 data/
 
-Qwen/
-gemma4/
+model/
 test_output/
 
 *.pyc

@@ -534,13 +534,14 @@ class MapAgentUI:
             port = port or 8000
             os.environ["QWEN_BASE_URL"] = f"http://localhost:{port}/v1"
             os.environ["LLM_PROVIDER"] = "qwen_local"
+            os.environ["LLM_MODEL"] = "Qwen3_5"  # 本地模型名
             api_key = "dummy"  # 本地模型不需要真实 API key
         elif provider in ["gemma4_local", "gemma4"]:
             port = port or 8001
             gguf_file = gguf_file or "gemma-4-31B-it-Q4_K_M.gguf"
             os.environ["GEMMA4_BASE_URL"] = f"http://localhost:{port}/v1"
             os.environ["LLM_PROVIDER"] = "gemma4_local"
-            os.environ["LLM_MODEL"] = gguf_file.replace(".gguf", "")
+            os.environ["LLM_MODEL"] = "Gemma4"  # 本地模型名
             api_key = "dummy"
 
         self.agent = create_master_agent(

@@ -81,9 +81,9 @@ class LLMConfig:
             LLMProvider.ANTHROPIC: "claude-sonnet-4-6",
             LLMProvider.DEEPSEEK: "deepseek-reasoner",
             LLMProvider.OPENAI: "gpt-4o",
-            LLMProvider.LOCAL: "Qwen3___5-35B-A3B",
-            LLMProvider.QWEN_LOCAL: "Qwen3___5-35B-A3B",
-            LLMProvider.GEMMA4_LOCAL: "gemma-4-31B-it",
+            LLMProvider.LOCAL: "Qwen3_5",
+            LLMProvider.QWEN_LOCAL: "Qwen3_5",
+            LLMProvider.GEMMA4_LOCAL: "Gemma4",
         }
 
         # 根据提供商选择 API key
@@ -155,15 +155,15 @@ class LLMConfig:
         """创建本地 Qwen 模型配置
 
         Args:
-            model_path: 模型路径，默认为 model/Qwen/Qwen3___5-35B-A3B
+            model_path: 模型路径，默认为 model/qwen
             port: 服务端口，默认 8000
         """
         project_root = os.getenv("PROJECT_ROOT", "/data/DC/MapAgent")
-        default_path = os.path.join(project_root, "model", "Qwen", "Qwen3___5-35B-A3B")
+        default_path = os.path.join(project_root, "model", "qwen")
 
         return cls(
             provider=LLMProvider.QWEN_LOCAL,
-            model="Qwen3___5-35B-A3B",
+            model="Qwen3_5",
             base_url=f"http://localhost:{port}/v1",
             api_key="dummy",
             local_model_path=model_path or default_path,
@@ -173,13 +173,11 @@ class LLMConfig:
 
     @classmethod
     def for_gemma4_local(cls, model_path: Optional[str] = None,
-                         gguf_file: str = "gemma-4-31B-it-Q4_K_M.gguf",
                          port: int = 8001) -> "LLMConfig":
         """创建本地 Gemma4 模型配置
 
         Args:
             model_path: 模型目录路径，默认为 model/gemma4
-            gguf_file: GGUF 模型文件名
             port: 服务端口，默认 8001
         """
         project_root = os.getenv("PROJECT_ROOT", "/data/DC/MapAgent")
@@ -187,7 +185,7 @@ class LLMConfig:
 
         return cls(
             provider=LLMProvider.GEMMA4_LOCAL,
-            model=gguf_file.replace(".gguf", ""),  # 模型名称去掉扩展名
+            model="Gemma4",
             base_url=f"http://localhost:{port}/v1",
             api_key="dummy",
             local_model_path=model_path or default_path,
@@ -381,6 +379,7 @@ class OpenAICompatibleClient(BaseLLMClient):
             response = self.client.chat.completions.create(**kwargs)
             message = response.choices[0].message
 
+            # 处理结构化 tool_calls
             if message.tool_calls:
                 # 添加助手消息
                 full_messages.append({
@@ -412,10 +411,80 @@ class OpenAICompatibleClient(BaseLLMClient):
                         "tool_call_id": tc.id,
                         "content": json.dumps(result, ensure_ascii=False)
                     })
+            elif message.content and "<|tool_call>" in message.content:
+                # 处理 Gemma4 格式的 tool calls (文本格式)
+                parsed_calls = self._parse_gemma4_tool_calls(message.content)
+                if parsed_calls:
+                    # 添加助手消息
+                    full_messages.append({
+                        "role": "assistant",
+                        "content": message.content,
+                    })
+
+                    # 执行工具
+                    for i, tc in enumerate(parsed_calls):
+                        if tool_handler:
+                            result = tool_handler(tc["name"], tc["arguments"])
+                        else:
+                            result = {"error": "No tool handler"}
+
+                        full_messages.append({
+                            "role": "tool",
+                            "tool_call_id": f"call_{i}",
+                            "content": json.dumps(result, ensure_ascii=False)
+                        })
+                else:
+                    return message.content or ""
             else:
                 return message.content or ""
 
         return "超过最大工具调用轮数"
+
+    def _parse_gemma4_tool_calls(self, content: str) -> List[Dict]:
+        """解析 Gemma4 格式的 tool calls
+
+        格式: <|tool_call>call:function_name{param:value}<tool_call|>
+        """
+        import re
+        tool_calls = []
+
+        # 匹配 <|tool_call>call:name{json_args}<tool_call|>
+        # 使用更宽松的匹配，因为参数可能包含嵌套内容
+        pattern = r'<\|tool_call\>call:(\w+)\{(.*?)\}<tool_call\|>'
+        matches = re.findall(pattern, content, re.DOTALL)
+
+        for name, args_str in matches:
+            try:
+                # 尝试解析参数（可能是 JSON 或特殊格式）
+                # 处理 <|"|>| 格式的引号（Gemma4 特殊格式）
+                args_str_clean = args_str.replace('<|"|>', '"').replace('<|">|', '"').replace('<|">>', '"')
+
+                # 尝试解析为 JSON
+                args = {}
+                if args_str_clean.strip():
+                    try:
+                        args = json.loads(args_str_clean)
+                    except json.JSONDecodeError:
+                        # 如果不是标准 JSON，尝试简单的键值解析
+                        # 格式可能是 key:value 或 key:"value"
+                        parts = args_str_clean.split(',')
+                        for part in parts:
+                            part = part.strip()
+                            if ':' in part:
+                                k, v = part.split(':', 1)
+                                k = k.strip()
+                                v = v.strip().strip('"').strip("'")
+                                args[k] = v
+
+                tool_calls.append({
+                    "name": name,
+                    "arguments": args
+                })
+            except Exception as e:
+                print(f"解析 tool call 失败: {e}")
+                continue
+
+        return tool_calls
 
     def _convert_tools(self, tools: List[Dict]) -> List[Dict]:
         """转换工具格式为 OpenAI 格式"""

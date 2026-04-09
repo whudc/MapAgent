@@ -57,21 +57,14 @@ class Settings(BaseSettings):
         """获取本地模型配置"""
         configs = {
             "qwen": {
-                "model_name": "Qwen3___5-35B-A3B",
-                "model_path": str(self.project_root / "model" / "Qwen" / "Qwen3___5-35B-A3B"),
+                "model_name": "Qwen3_5",
+                "model_path": str(self.project_root / "model" / "qwen"),
                 "default_port": 8000,
             },
             "gemma4": {
-                "model_name": "gemma-4-31B-it",
+                "model_name": "Gemma4",
                 "model_path": str(self.project_root / "model" / "gemma4"),
                 "default_port": 8001,
-                # GGUF 模型文件列表
-                "gguf_models": [
-                    "gemma-4-31B-it-Q4_K_M.gguf",
-                    "gemma-4-31B-it-Q4_0.gguf",
-                    "gemma-4-31B-it-Q5_K_S.gguf",
-                    "gemma-4-31B-it-Q6_K.gguf",
-                ],
             }
         }
         return configs.get(self.local_model_type, configs["qwen"])

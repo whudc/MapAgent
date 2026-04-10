@@ -1,5 +1,8 @@
-"""MapAgent UI 模块"""
+"""MapAgent UI 模块
 
-from .app import create_ui, MapAgentUI, FastMapVisualizer
+提供 Flask 纯前端 UI (server.py) - 使用 Canvas 渲染，性能更优
+"""
 
-__all__ = ["create_ui", "MapAgentUI", "FastMapVisualizer"]
+__all__ = ["app", "main"]
+
+from .server import app, main

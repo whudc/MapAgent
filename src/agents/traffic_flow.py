@@ -589,14 +589,22 @@ class LLMOptimizer:
             map_api: 地图 API
 
         Returns:
-            分析结果
+            分析结果，包含推理时间
         """
+        import time
+        start_time = time.time()
+
         cache_key = f"id_jump_{track_id}_{frame_id}"
         if cache_key in self._id_jump_cache:
-            return self._id_jump_cache[cache_key]
+            cached_result = self._id_jump_cache[cache_key]
+            # 缓存命中也记录时间（虽然是 0）
+            cached_result['inference_time'] = 0.0
+            return cached_result
 
         if not self.llm_client:
-            return self._rule_based_id_judge(track_history, recent_detections)
+            result = self._rule_based_id_judge(track_history, recent_detections)
+            result['inference_time'] = 0.0
+            return result
 
         # 通知前端开始 ID 分析
         self._notify_progress("id_analysis_start", {
@@ -661,22 +669,36 @@ class LLMOptimizer:
                 "track_id": track_id
             })
 
+            print(f"[DEBUG] Calling LLM for track {track_id}...")
             response = self.llm_client.chat_simple(prompt)
+            print(f"[DEBUG] LLM response received for track {track_id}: {response[:100] if response else 'EMPTY'}")
+
             result = self._parse_llm_response(response)
+
+            # 记录推理时间
+            inference_time = time.time() - start_time
+            result['inference_time'] = inference_time
+            result['frame_id'] = frame_id
 
             self._notify_progress("id_analysis_result", {
                 "track_id": track_id,
                 "result": result,
-                "llm_response": response[:500] if len(response) > 500 else response
+                "llm_response": response[:500] if len(response) > 500 else response,
+                "inference_time": inference_time  # 推送到前端
             })
         except Exception as e:
             import traceback
             error_detail = f"{str(e)}\n{traceback.format_exc()}"
+            print(f"[ERROR] LLM call failed for track {track_id}: {error_detail}")
             self._notify_progress("id_analysis_error", {
                 "track_id": track_id,
-                "error": error_detail
+                "error": error_detail[:500]  # 只发送前 500 字符
             })
             result = self._rule_based_id_judge(track_history, recent_detections)
+            # 规则判断不计入推理时间
+            result['inference_time'] = 0.0
+            result['frame_id'] = frame_id
+            result['fallback'] = True  # 标记为降级处理
 
         self._id_jump_cache[cache_key] = result
         return result
@@ -797,6 +819,261 @@ class LLMOptimizer:
         except:
             pass
         return {"cause": "unknown", "confidence": 0.3, "affected_ids": [], "reasoning": "解析失败"}
+
+    def analyze_track_quality(self,
+                               track_id: int,
+                               track_history: List[Dict],
+                               issues: List[Dict],
+                               map_api: Optional[Any] = None) -> Dict:
+        """
+        分析轨迹质量
+
+        Args:
+            track_id: 轨迹 ID
+            track_history: 轨迹历史
+            issues: 检测到的问题列表
+            map_api: 地图 API
+
+        Returns:
+            分析结果，包含 action 建议
+        """
+        cache_key = f"track_quality_{track_id}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+
+        if not self.llm_client:
+            return self._rule_based_track_quality(issues)
+
+        # 通知前端开始轨迹分析
+        self._notify_progress("track_analysis_start", {
+            "track_id": track_id,
+            "issues": issues,
+            "history_length": len(track_history)
+        })
+
+        # 构建 prompt
+        prompt = f"""【轨迹质量分析】
+
+轨迹 ID: {track_id}
+轨迹长度：{len(track_history)} 帧
+
+【检测到的问题】"""
+
+        for issue in issues:
+            prompt += f"""
+- {issue.get('type')}: {issue.get('description')}"""
+
+        prompt += f"""
+
+【轨迹历史】（最近 {len(track_history)} 帧）"""
+        for i, pos in enumerate(track_history[-5:]):
+            prompt += f"""
+- 帧 {pos.get('frame_id', '?')}: 位置 ({pos.get('pos', [0, 0])[:2]})"""
+
+        prompt += """
+
+请分析：
+1. 这条轨迹是否存在问题？
+2. 问题的根本原因是什么？
+3. 建议的处理方式是什么？
+
+返回 JSON:
+{
+    "action": "keep|merge|remove|interpolate",
+    "confidence": 0.0-1.0,
+    "reasoning": "推理说明",
+    "merge_with": 123  // 仅当 action=merge 时需要
+}
+"""
+
+        self.call_count += 1
+        try:
+            # 通知前端 LLM 思考中
+            self._notify_progress("llm_thinking", {
+                "analysis_type": "track_quality",
+                "track_id": track_id,
+                "prompt_preview": prompt[:200] + "..."
+            })
+
+            response = self.llm_client.chat_simple(prompt)
+            result = self._parse_llm_response(response)
+
+            # 通知前端分析结果
+            self._notify_progress("track_analysis_result", {
+                "track_id": track_id,
+                "result": result,
+                "llm_response": response[:500] if len(response) > 500 else response
+            })
+        except Exception as e:
+            import traceback
+            error_detail = f"{str(e)}\n{traceback.format_exc()}"
+            print(f"[ERROR] LLM track analysis failed for track {track_id}: {error_detail}")
+            self._notify_progress("track_analysis_error", {
+                "track_id": track_id,
+                "error": error_detail[:500]
+            })
+            result = self._rule_based_track_quality(issues)
+
+        self.cache[cache_key] = result
+        return result
+
+    def _rule_based_track_quality(self, issues: List[Dict]) -> Dict:
+        """基于规则的轨迹质量判断"""
+        if not issues:
+            return {"action": "keep", "confidence": 0.9, "reasoning": "无明显问题"}
+
+        # 根据问题类型判断
+        issue_types = [i.get('type') for i in issues]
+
+        if 'speed_anomaly' in issue_types:
+            return {"action": "remove", "confidence": 0.7, "reasoning": "速度异常，可能是误检"}
+
+        if 'trajectory_gap' in issue_types:
+            return {"action": "interpolate", "confidence": 0.6, "reasoning": "轨迹不连续，建议插值"}
+
+        if 'lost_frames' in issue_types:
+            return {"action": "remove", "confidence": 0.5, "reasoning": "丢失帧数过多"}
+
+        return {"action": "keep", "confidence": 0.5, "reasoning": "问题不明确"}
+
+    def analyze_id_jumping_batch(self,
+                                  track1_id: int,
+                                  track1: TrackedObject,
+                                  track2_id: int,
+                                  track2: TrackedObject,
+                                  jump_info: Dict,
+                                  map_api: Optional[Any] = None) -> Dict:
+        """
+        批量分析 ID 跳变 - 判断两条轨迹是否应合并
+
+        Args:
+            track1_id: 第一条轨迹 ID
+            track1: 第一条轨迹（时间上在先）
+            track2_id: 第二条轨迹 ID
+            track2: 第二条轨迹（时间上在后）
+            jump_info: 跳变检测信息
+            map_api: 地图 API
+
+        Returns:
+            分析结果，包含 should_merge 建议
+        """
+        cache_key = f"id_jump_batch_{track1_id}_{track2_id}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+
+        if not self.llm_client:
+            return self._rule_based_id_jumping(jump_info)
+
+        # 通知前端开始 ID 跳变分析
+        self._notify_progress("id_jumping_analysis_start", {
+            "track1_id": track1_id,
+            "track2_id": track2_id,
+            "time_gap": jump_info.get('time_gap'),
+            "distance": jump_info.get('distance')
+        })
+
+        # 构建轨迹信息
+        track1_info = {
+            'id': track1_id,
+            'frame_range': [track1.frame_ids[0], track1.frame_ids[-1]],
+            'length': len(track1.positions),
+            'end_pos': track1.positions[-1][:2] if track1.positions else [0, 0],
+            'end_vel': track1.velocities[-1][:2] if track1.velocities else [0, 0],
+        }
+
+        track2_info = {
+            'id': track2_id,
+            'frame_range': [track2.frame_ids[0], track2.frame_ids[-1]],
+            'length': len(track2.positions),
+            'start_pos': track2.positions[0][:2] if track2.positions else [0, 0],
+            'start_vel': track2.velocities[0][:2] if track2.velocities else [0, 0],
+        }
+
+        # 构建 prompt
+        prompt = f"""【ID 跳变分析】
+
+检测到一个可能的 ID 跳变情况：
+
+【轨迹 1】（时间上在先）
+- ID: {track1_info['id']}
+- 帧范围：{track1_info['frame_range'][0]} → {track1_info['frame_range'][1]}
+- 长度：{track1_info['length']} 帧
+- 结束位置：{track1_info['end_pos']}
+- 结束速度：{track1_info['end_vel']}
+
+【轨迹 2】（时间上在后）
+- ID: {track2_info['id']}
+- 帧范围：{track2_info['frame_range'][0]} → {track2_info['frame_range'][1]}
+- 长度：{track2_info['length']} 帧
+- 起始位置：{track2_info['start_pos']}
+- 起始速度：{track2_info['start_vel']}
+
+【间隙信息】
+- 时间间隔：{jump_info.get('time_gap')} 帧
+- 预测位置：{jump_info.get('predicted_pos')}
+- 实际起始位置：{jump_info.get('track2_start_pos')}
+- 位置偏差：{jump_info.get('distance', 0):.1f} 米
+
+请分析：
+1. 这两条轨迹是否代表同一辆车？
+2. 如果是，合并它们的置信度是多少？
+
+返回 JSON:
+{{
+    "should_merge": true/false,
+    "confidence": 0.0-1.0,
+    "reasoning": "推理说明"
+}}
+"""
+
+        self.call_count += 1
+        try:
+            # 通知前端 LLM 思考中
+            self._notify_progress("llm_thinking", {
+                "analysis_type": "id_jumping",
+                "track1_id": track1_id,
+                "track2_id": track2_id,
+                "prompt_preview": prompt[:200] + "..."
+            })
+
+            response = self.llm_client.chat_simple(prompt)
+            result = self._parse_llm_response(response)
+
+            # 通知前端分析结果
+            self._notify_progress("id_jumping_analysis_result", {
+                "track1_id": track1_id,
+                "track2_id": track2_id,
+                "result": result,
+                "llm_response": response[:500] if len(response) > 500 else response
+            })
+        except Exception as e:
+            import traceback
+            error_detail = f"{str(e)}\n{traceback.format_exc()}"
+            print(f"[ERROR] LLM id_jumping analysis failed: {error_detail}")
+            self._notify_progress("id_jumping_analysis_error", {
+                "track1_id": track1_id,
+                "track2_id": track2_id,
+                "error": error_detail[:500]
+            })
+            result = self._rule_based_id_jumping(jump_info)
+
+        self.cache[cache_key] = result
+        return result
+
+    def _rule_based_id_jumping(self, jump_info: Dict) -> Dict:
+        """基于规则的 ID 跳变判断"""
+        time_gap = jump_info.get('time_gap', 999)
+        distance = jump_info.get('distance', 999)
+
+        # 时间间隔小且距离近，认为应合并
+        if time_gap <= 3 and distance < 5.0:
+            return {"should_merge": True, "confidence": 0.8, "reasoning": f"时间间隔{time_gap}帧，距离{distance:.1f}m"}
+        elif time_gap <= 5 and distance < 8.0:
+            return {"should_merge": True, "confidence": 0.6, "reasoning": f"时间间隔{time_gap}帧，距离{distance:.1f}m"}
+        elif time_gap <= 10 and distance < 10.0:
+            return {"should_merge": True, "confidence": 0.4, "reasoning": f"时间间隔{time_gap}帧，距离{distance:.1f}m"}
+        else:
+            return {"should_merge": False, "confidence": 0.7, "reasoning": f"时间/距离差异过大"}
 
 
 # ==================== 主 Agent ====================
@@ -986,6 +1263,7 @@ class TrafficFlowAgent(BaseAgent):
                 "total_frames": len(frames),
                 "total_vehicles": len(self._trajectories),
                 "saved_to": output_path,
+                "statistics": recon_result.get('statistics', {}),  # 添加统计信息
             }
 
         return {
@@ -1190,24 +1468,28 @@ class TrafficFlowAgent(BaseAgent):
         # 上一帧的车道统计（用于数量守恒分析）
         prev_lane_tracks: Dict[str, List] = {}
 
-        # 处理每一帧
+        # LLM 推理时间统计
+        llm_inference_times = []
+
+        # 处理每一帧 - DeepSORT 跟踪 + 每帧 LLM ID 跳变检测
         for frame in frames:
             detections = self._prepare_detections(frame)
             self._tracker.update(detections, frame.frame_id)
 
-            # LLM 增强处理（如果启用）
+            # 【恢复】每帧 LLM ID 跳变检测（使用 LLM 增强处理）
             if self._use_llm and self._llm_optimizer and self.map_api:
-                self._llm_enhanced_process_with_lanes(frame, detections, prev_lane_tracks)
-            elif self._use_llm:
-                # 调试输出
-                if not self._llm_optimizer:
-                    print(f"[DEBUG] Frame {frame.frame_id}: _llm_optimizer is None")
-                if not self.map_api:
-                    print(f"[DEBUG] Frame {frame.frame_id}: map_api is None")
+                start_time = __import__('time').time()
+                self._llm_per_frame_id_consistency_analysis(frame, detections, prev_lane_tracks)
+                elapsed = __import__('time').time() - start_time
+                llm_inference_times.append(elapsed)
 
             # 更新车道统计
             if self._use_llm:
                 prev_lane_tracks = self._get_lane_constrained_tracks()
+
+        # 跟踪完成后，批量调用 LLM 分析完整轨迹（二次优化）
+        if self._use_llm and self._llm_optimizer and self.map_api:
+            self._llm_batch_analyze_trajectories(frames)
 
         # 构建轨迹（包含插值帧）
         self._build_trajectories_with_interpolation()
@@ -1217,6 +1499,17 @@ class TrafficFlowAgent(BaseAgent):
         stats['llm_calls'] = self._stats.get('llm_calls', 0)
         stats['use_lane_constraint'] = use_lane_constraint
         stats['use_interpolation'] = use_interpolation
+
+        # LLM 推理时间统计
+        if llm_inference_times:
+            stats['llm_inference_time'] = {
+                'total_calls': len(llm_inference_times),
+                'total_time': sum(llm_inference_times),
+                'avg_time': sum(llm_inference_times) / len(llm_inference_times),
+                'min_time': min(llm_inference_times),
+                'max_time': max(llm_inference_times),
+            }
+
         # 调试信息
         stats['_debug'] = {
             'self._use_llm': self._use_llm,
@@ -1273,92 +1566,39 @@ class TrafficFlowAgent(BaseAgent):
 
         return lane_tracks
 
-    def _llm_enhanced_process_with_lanes(self, frame: FrameDetection,
-                                          detections: List[Dict],
-                                          prev_lane_tracks: Dict[str, List]):
+    def _llm_per_frame_id_consistency_analysis(self, frame: FrameDetection,
+                                                detections: List[Dict],
+                                                prev_lane_tracks: Dict[str, List]):
         """
-        LLM 增强处理 - 车道感知版本
+        【恢复】每帧 LLM ID 一致性分析
 
-        核心优化：
-        1. 车道数量守恒分析
-        2. 遮挡目标推理
-        3. ID 一致性分析（防止 ID 跳变）
+        核心功能：
+        1. 对每条活跃轨迹进行 ID 一致性分析
+        2. 防止 ID 跳变
+        3. 记录每次 LLM 推理时间
+
+        Args:
+            frame: 当前帧数据
+            detections: 当前帧检测
+            prev_lane_tracks: 上一帧车道统计
         """
-        print(f"[DEBUG] _llm_enhanced_process_with_lanes called for frame {frame.frame_id}: llm_optimizer={self._llm_optimizer is not None}, map_api={self.map_api is not None}, detections={len(detections)}")
-
         if not self._llm_optimizer or not self.map_api:
             return
 
-        # 获取当前车道统计
-        curr_lane_tracks = self._get_lane_constrained_tracks()
-
-        # 分析每条车道的数量变化
-        for lane_id in set(prev_lane_tracks.keys()) | set(curr_lane_tracks.keys()):
-            prev_tracks = prev_lane_tracks.get(lane_id, [])
-            curr_tracks = curr_lane_tracks.get(lane_id, [])
-
-            prev_count = len(prev_tracks)
-            curr_count = len(curr_tracks)
-            diff = curr_count - prev_count
-
-            # 小变化用规则处理（变化量 <=1 时不需要 LLM）
-            if abs(diff) <= 1:
-                continue
-
-            # 大变化调用 LLM 分析
-            llm_result = self._llm_optimizer.analyze_lane_count_conservation(
-                lane_id=lane_id,
-                prev_frame_id=frame.frame_id - 1,
-                curr_frame_id=frame.frame_id,
-                prev_tracks=[self._dict_to_lane_track(t) for t in prev_tracks],
-                curr_detections=[d for d in detections if self._get_detection_lane(d) == lane_id],
-                map_api=self.map_api
-            )
-
-            self._stats['llm_calls'] += 1
-
-            # 根据 LLM 建议处理
-            if llm_result.get('action') == 'interpolate':
-                # 插值丢失的轨迹
-                affected_ids = llm_result.get('affected_track_ids', [])
-                for track_id in affected_ids:
-                    self._interpolate_track(track_id, frame.frame_id)
-
-        # 遮挡分析 - 对丢失的轨迹进行分析
-        # 条件：轨迹已确认且丢失帧数在 1-10 之间
-        for track_id, track in self._tracker.tracks.items():
-            if track.state != TrackState.DELETED and 0 < track.time_since_update <= 10:
-                # 轨迹丢失，检查是否被遮挡
-                nearby_tracks = self._get_nearby_tracks(track, radius=5.0)
-
-                llm_result = self._llm_optimizer.analyze_occlusion(
-                    lost_track=self._track_to_lane_track(track),
-                    nearby_tracks=[self._track_to_lane_track(t) for t in nearby_tracks],
-                    curr_detections=detections,
-                    map_api=self.map_api
-                )
-
-                self._stats['llm_calls'] += 1
-
-                if llm_result.get('is_occluded') and llm_result.get('action') == 'keep':
-                    # 保持被遮挡的轨迹
-                    track.confidence = 0.5  # 降低置信度但不删除
-
-        # 【新增】ID 一致性分析 - 防止 ID 跳变
-        # 对每条活跃的轨迹，强制每帧进行 ID 一致性分析
-        print(f"[DEBUG] Starting ID consistency analysis for frame {frame.frame_id}: {len(self._tracker.tracks)} tracks")
+        # 对每条活跃轨迹进行 ID 一致性分析
         for track_id, track in self._tracker.tracks.items():
             if track.state == TrackState.DELETED:
                 continue
             if not track.positions or len(track.positions) < 2:
                 continue  # 轨迹太短，不分析
 
-            # 构建轨迹历史
+            # 构建轨迹历史（最近 5-10 帧）
             track_history = []
-            for i, (pos, frame_id_hist) in enumerate(zip(track.positions[-5:], track.frame_ids[-5:])):
+            start_idx = max(0, len(track.positions) - 10)
+            for i in range(start_idx, len(track.positions)):
                 track_history.append({
-                    'frame_id': frame_id_hist,
-                    'pos': pos,
+                    'frame_id': track.frame_ids[i],
+                    'pos': list(track.positions[i]),
                     'confidence': getattr(track, 'confidence', 1.0)
                 })
 
@@ -1371,9 +1611,7 @@ class TrafficFlowAgent(BaseAgent):
                 if dist < 5.0:  # 5 米范围内的检测
                     nearby_detections.append(det)
 
-            print(f"[DEBUG] Track {track_id}: analyzing with {len(nearby_detections)} nearby detections")
-
-            # 强制每帧调用 LLM 分析 ID 一致性
+            # 调用 LLM 分析 ID 一致性
             llm_result = self._llm_optimizer.analyze_id_jumping(
                 track_id=track_id,
                 track_history=track_history,
@@ -1381,15 +1619,32 @@ class TrafficFlowAgent(BaseAgent):
                 frame_id=frame.frame_id,
                 map_api=self.map_api
             )
+
             self._stats['llm_calls'] += 1
-            print(f"[DEBUG] Track {track_id}: LLM call completed, llm_calls={self._stats['llm_calls']}")
 
             # 根据 LLM 建议处理
             if llm_result.get('decision') == 'keep_id':
                 det_idx = llm_result.get('target_detection_idx', -1)
                 if det_idx >= 0 and det_idx < len(nearby_detections):
-                    # 确保轨迹与正确的检测关联
-                    pass  # LLM 已确认当前匹配正确
+                    # LLM 已确认当前匹配正确，无需处理
+                    pass
+
+    def _llm_enhanced_process_with_lanes(self, frame: FrameDetection,
+                                          detections: List[Dict],
+                                          prev_lane_tracks: Dict[str, List]):
+        """
+        【已弃用】LLM 增强处理 - 车道感知版本（逐帧调用）
+
+        已改为跟踪完成后批量分析：_llm_batch_analyze_trajectories()
+        已恢复每帧 ID 分析：_llm_per_frame_id_consistency_analysis()
+
+        核心优化：
+        1. 车道数量守恒分析
+        2. 遮挡目标推理
+        3. ID 一致性分析（防止 ID 跳变）
+        """
+        # 【弃用】此方法已不再使用，保留以便需要时回退
+        pass
 
     def _dict_to_lane_track(self, d: Dict) -> LaneConstrainedTrack:
         """将字典转换为车道约束轨迹"""
@@ -1499,6 +1754,373 @@ class TrafficFlowAgent(BaseAgent):
             self._lane_history[lane_id].count_history.append(len(detections))
 
         return anomalies
+
+    def _llm_batch_analyze_trajectories(self, frames: List[FrameDetection]):
+        """
+        【新增】批量 LLM 分析 - 跟踪完成后对完整轨迹进行分析
+
+        核心优化：
+        1. 不再逐帧调用 LLM，而是等跟踪完成后批量分析
+        2. 基于完整轨迹进行全局分析，更准确
+        3. 只分析有问题的轨迹，减少 LLM 调用
+
+        分析内容：
+        1. ID 跳变检测 - 识别并修正 ID 不连续（**新增**）
+        2. 轨迹片段合并 - 识别同一车辆的多段轨迹
+        3. 异常轨迹标记 - 标记可疑的轨迹（如瞬移、速度异常）
+        """
+        print(f"\n[LLM 批量分析] 开始分析 {len(self._tracker.tracks)} 条轨迹...")
+
+        tracks = self._tracker.get_active_tracks()
+        analysis_results = []
+
+        # 1. 【新增】首先进行 ID 跳变检测与轨迹合并
+        print("[ID 跳变检测] 开始检测并合并 ID 跳变轨迹...")
+        self._detect_and_merge_id_jumping_trajectories(tracks, frames)
+
+        # 2. 全局车道数量分析
+        self._llm_analyze_lane_count_conservation(frames)
+
+        # 3. 对每条轨迹进行分析
+        for track_id, track in tracks.items():
+            if track.state == TrackState.DELETED:
+                continue
+
+            # 跳过太短的轨迹
+            if len(track.frame_ids) < 3:
+                continue
+
+            result = self._llm_analyze_single_track(track_id, track, frames)
+            if result:
+                analysis_results.append(result)
+
+        # 4. 基于分析结果进行轨迹优化
+        self._apply_llm_analysis_results(analysis_results)
+
+        print(f"[LLM 批量分析] 完成，共分析 {len(analysis_results)} 条轨迹，LLM 调用 {self._stats.get('llm_calls', 0)} 次")
+
+    def _detect_and_merge_id_jumping_trajectories(self, tracks: Dict, frames: List[FrameDetection]):
+        """
+        【新增】检测并合并 ID 跳变的轨迹
+
+        核心思路：
+        1. 找出时间上不重叠但车道相同的轨迹对
+        2. 检查位置连续性（前一条轨迹的末端 vs 后一条轨迹的始端）
+        3. 对可疑的轨迹对调用 LLM 分析是否应合并
+        """
+        if not self._llm_optimizer:
+            return
+
+        # 按车道分组轨迹
+        lane_trajectories: Dict[str, List[Tuple[int, TrackedObject]]] = {}
+        for track_id, track in tracks.items():
+            if track.state == TrackState.DELETED:
+                continue
+            if len(track.frame_ids) < 2:
+                continue
+
+            lane_id = getattr(self._tracker, '_track_lanes', {}).get(track_id, 'unknown')
+            if lane_id not in lane_trajectories:
+                lane_trajectories[lane_id] = []
+            lane_trajectories[lane_id].append((track_id, track))
+
+        # 对每条车道，检测可能的 ID 跳变
+        for lane_id, traj_list in lane_trajectories.items():
+            # 按起始帧排序
+            traj_list.sort(key=lambda x: x[1].frame_ids[0])
+
+            # 检查相邻轨迹对
+            for i in range(len(traj_list) - 1):
+                id1, track1 = traj_list[i]
+                id2, track2 = traj_list[i + 1]
+
+                # 检查是否可能 ID 跳变
+                jump_info = self._check_possible_id_jumping(track1, track2)
+
+                if jump_info and jump_info['possible']:
+                    # 调用 LLM 分析是否应合并
+                    llm_result = self._llm_optimizer.analyze_id_jumping_batch(
+                        track1_id=id1,
+                        track1=track1,
+                        track2_id=id2,
+                        track2=track2,
+                        jump_info=jump_info,
+                        map_api=self.map_api
+                    )
+
+                    self._stats['llm_calls'] += 1
+
+                    # 根据 LLM 建议合并
+                    if llm_result.get('should_merge', False):
+                        print(f"[ID 合并] 合并轨迹 {id1} 和 {id2}: {llm_result.get('reasoning')}")
+                        self._merge_trajectories(id1, id2)
+
+    def _check_possible_id_jumping(self, track1: TrackedObject, track2: TrackedObject) -> Dict:
+        """
+        检查两条轨迹是否可能是 ID 跳变
+
+        判断条件：
+        1. 时间不重叠（track1 结束 < track2 开始）
+        2. 时间间隔小（< 10 帧）
+        3. 位置接近（< 10 米）
+        4. 速度方向一致
+        """
+        # 时间检查
+        end_frame_1 = track1.frame_ids[-1]
+        start_frame_2 = track2.frame_ids[0]
+
+        if start_frame_2 <= end_frame_1:
+            return {'possible': False, 'reason': '时间重叠'}
+
+        time_gap = start_frame_2 - end_frame_1
+        if time_gap > 10:
+            return {'possible': False, 'reason': '时间间隔过大'}
+
+        # 位置检查
+        end_pos_1 = np.array(track1.positions[-1][:2])
+        start_pos_2 = np.array(track2.positions[0][:2])
+
+        # 预测 track1 结束时的位置（基于速度）
+        if len(track1.velocities) > 0:
+            vel = np.array(track1.velocities[-1][:2])
+            predicted_pos = end_pos_1 + vel * time_gap * 0.1
+        else:
+            predicted_pos = end_pos_1
+
+        distance = np.linalg.norm(predicted_pos - start_pos_2)
+
+        if distance > 15.0:
+            return {'possible': False, 'reason': f'距离过远：{distance:.1f}m'}
+
+        # 速度方向检查
+        if len(track1.velocities) > 0 and len(track2.velocities) > 0:
+            vel1 = np.array(track1.velocities[-1][:2])
+            vel2 = np.array(track2.velocities[0][:2])
+
+            # 计算方向夹角
+            norm1, norm2 = np.linalg.norm(vel1), np.linalg.norm(vel2)
+            if norm1 > 0.1 and norm2 > 0.1:
+                cos_sim = np.dot(vel1, vel2) / (norm1 * norm2)
+                if cos_sim < 0.5:  # 夹角大于 60 度
+                    return {'possible': False, 'reason': '速度方向不一致'}
+
+        return {
+            'possible': True,
+            'time_gap': time_gap,
+            'distance': distance,
+            'track1_end_pos': end_pos_1.tolist(),
+            'track2_start_pos': start_pos_2.tolist(),
+            'predicted_pos': predicted_pos.tolist()
+        }
+
+    def _llm_analyze_lane_count_conservation(self, frames: List[FrameDetection]):
+        """批量分析各车道的数量守恒情况"""
+        if not self._llm_optimizer:
+            return
+
+        # 按车道分组统计每帧的车辆数
+        lane_frame_counts: Dict[str, Dict[int, List]] = {}  # lane_id -> frame_id -> track_ids
+
+        for track_id, track in self._tracker.tracks.items():
+            if track.state == TrackState.DELETED:
+                continue
+            lane_id = getattr(self._tracker, '_track_lanes', {}).get(track_id, 'unknown')
+            if lane_id not in lane_frame_counts:
+                lane_frame_counts[lane_id] = {}
+
+            for frame_id in track.frame_ids:
+                if frame_id not in lane_frame_counts[lane_id]:
+                    lane_frame_counts[lane_id][frame_id] = []
+                lane_frame_counts[lane_id][frame_id].append(track_id)
+
+        # 分析每条车道的数量变化
+        for lane_id, frame_counts in lane_frame_counts.items():
+            sorted_frames = sorted(frame_counts.keys())
+            for i in range(1, len(sorted_frames)):
+                prev_frame = sorted_frames[i - 1]
+                curr_frame = sorted_frames[i]
+                prev_count = len(frame_counts[prev_frame])
+                curr_count = len(frame_counts[curr_frame])
+                diff = curr_count - prev_count
+
+                # 只有大变化才调用 LLM
+                if abs(diff) >= 2:
+                    self._llm_optimizer.analyze_lane_count_conservation(
+                        lane_id=lane_id,
+                        prev_frame_id=prev_frame,
+                        curr_frame_id=curr_frame,
+                        prev_tracks=[],  # 批量分析时不需要详细轨迹信息
+                        curr_detections=[],
+                        map_api=self.map_api
+                    )
+                    self._stats['llm_calls'] += 1
+
+    def _llm_analyze_single_track(self, track_id: int, track: TrackedObject,
+                                   frames: List[FrameDetection]) -> Optional[Dict]:
+        """分析单条轨迹"""
+        if not self._llm_optimizer:
+            return None
+
+        # 构建轨迹历史
+        track_history = []
+        for i, (pos, frame_id) in enumerate(zip(track.positions[-10:], track.frame_ids[-10:])):
+            track_history.append({
+                'frame_id': frame_id,
+                'pos': list(pos) if hasattr(pos, '__iter__') else pos,
+                'confidence': getattr(track, 'confidence', 1.0)
+            })
+
+        # 检测轨迹问题
+        issues = self._detect_track_issues(track)
+
+        if not issues:
+            return None  # 没有问题的轨迹，不需要 LLM 分析
+
+        # 调用 LLM 分析
+        result = self._llm_optimizer.analyze_track_quality(
+            track_id=track_id,
+            track_history=track_history,
+            issues=issues,
+            map_api=self.map_api
+        )
+
+        self._stats['llm_calls'] += 1
+
+        return {
+            'track_id': track_id,
+            'issues': issues,
+            'llm_result': result
+        }
+
+    def _detect_track_issues(self, track: TrackedObject) -> List[Dict]:
+        """检测轨迹问题"""
+        issues = []
+
+        if len(track.positions) < 2:
+            return issues
+
+        # 1. 检测速度异常
+        for i in range(1, len(track.positions)):
+            prev_pos = np.array(track.positions[i-1][:2])
+            curr_pos = np.array(track.positions[i][:2])
+            dist = np.linalg.norm(curr_pos - prev_pos)
+            speed = dist / 0.1  # 假设帧间隔 0.1 秒
+
+            if speed > 30.0:  # 超过 30m/s (108km/h)
+                issues.append({
+                    'type': 'speed_anomaly',
+                    'frame_idx': i,
+                    'speed': speed,
+                    'description': f'速度异常：{speed:.1f} m/s'
+                })
+
+        # 2. 检测轨迹不连续（跳跃）
+        for i in range(1, len(track.frame_ids)):
+            gap = track.frame_ids[i] - track.frame_ids[i-1]
+            if gap > 5:  # 帧间隔超过 5 帧
+                issues.append({
+                    'type': 'trajectory_gap',
+                    'frame_gap': gap,
+                    'description': f'轨迹不连续：缺失 {gap} 帧'
+                })
+
+        # 3. 检测丢失帧数过多
+        if track.time_since_update > 5:
+            issues.append({
+                'type': 'lost_frames',
+                'lost_count': track.time_since_update,
+                'description': f'丢失帧数过多：{track.time_since_update}'
+            })
+
+        return issues
+
+    def _apply_llm_analysis_results(self, results: List[Dict]):
+        """应用 LLM 分析结果进行轨迹优化"""
+        for result in results:
+            track_id = result['track_id']
+            llm_result = result.get('llm_result', {})
+
+            # 根据 LLM 建议处理
+            action = llm_result.get('action')
+
+            if action == 'merge':
+                # 合并轨迹（需要目标轨迹 ID）
+                target_id = llm_result.get('merge_with')
+                if target_id and target_id in self._tracker.tracks:
+                    self._merge_trajectories(track_id, target_id)
+
+            elif action == 'remove':
+                # 标记为删除
+                if track_id in self._tracker.tracks:
+                    self._tracker.tracks[track_id].state = TrackState.DELETED
+
+            elif action == 'interpolate':
+                # 插值修复
+                self._interpolate_track(track_id, 0)
+
+    def _merge_trajectories(self, track_id: int, target_id: int):
+        """
+        合并两条轨迹（用于 ID 跳变修复）
+
+        将 track_id 合并到 target_id，track_id 是时间上在先的轨迹
+        """
+        if track_id not in self._tracker.tracks or target_id not in self._tracker.tracks:
+            return
+
+        target_track = self._tracker.tracks[target_id]
+        source_track = self._tracker.tracks[track_id]
+
+        # 检查时间顺序：source 应该在 target 之前
+        if source_track.frame_ids[-1] > target_track.frame_ids[0]:
+            # 交换：target 应该接收 source 的数据
+            pass  # 继续执行，下面会正确处理
+        else:
+            # 时间顺序错误，交换处理
+            source_track, target_track = target_track, source_track
+
+        # 计算时间间隙
+        source_end_frame = source_track.frame_ids[-1]
+        target_start_frame = target_track.frame_ids[0]
+        gap = target_start_frame - source_end_frame - 1
+
+        # 如果有间隙，进行插值
+        if gap > 0:
+            self._interpolate_merge_gap(source_track, target_track, gap)
+
+        # 合并数据（source 在前，target 在后）
+        target_track.positions[:0] = source_track.positions
+        target_track.velocities[:0] = source_track.velocities
+        target_track.frame_ids[:0] = source_track.frame_ids
+
+        # 删除 source 轨迹
+        source_track.state = TrackState.DELETED
+        print(f"[轨迹合并] ID {source_track.track_id} → {target_track.track_id}, 填充 {gap} 帧间隙")
+
+    def _interpolate_merge_gap(self, source_track: TrackedObject, target_track: TrackedObject, gap: int):
+        """
+        对两条轨迹之间的间隙进行插值
+        """
+        if gap <= 0:
+            return
+
+        # 获取源轨迹的末端状态
+        end_pos = np.array(source_track.positions[-1][:2])
+        end_vel = np.array(source_track.velocities[-1][:2]) if source_track.velocities else np.array([0, 0])
+
+        # 获取目标轨迹的起始状态
+        start_pos = np.array(target_track.positions[0][:2])
+        start_vel = np.array(target_track.velocities[0][:2]) if target_track.velocities else np.array([0, 0])
+
+        # 线性插值间隙帧
+        for i in range(gap, 0, -1):
+            t = i / (gap + 1)  # 插值参数
+            interp_pos = end_pos + (start_pos - end_pos) * t
+            interp_vel = end_vel + (start_vel - end_vel) * t
+
+            # 插入到 source 轨迹末尾
+            source_track.positions.append([interp_pos[0], interp_pos[1], 0])
+            source_track.velocities.append([interp_vel[0], interp_vel[1], 0])
+            source_track.frame_ids.append(source_track.frame_ids[-1] + 1)
 
     def _build_trajectories_with_interpolation(self):
         """从跟踪器构建轨迹（包含插值帧）"""

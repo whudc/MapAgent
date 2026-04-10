@@ -79,7 +79,7 @@ class LLMConfig:
         # 根据提供商选择默认模型
         default_models = {
             LLMProvider.ANTHROPIC: "claude-sonnet-4-6",
-            LLMProvider.DEEPSEEK: "deepseek-reasoner",
+            LLMProvider.DEEPSEEK: "deepseek-chat",  # DeepSeek 有效模型：deepseek-chat, deepseek-coder
             LLMProvider.OPENAI: "gpt-4o",
             LLMProvider.LOCAL: "Qwen3_5",
             LLMProvider.QWEN_LOCAL: "Qwen3_5",
@@ -604,6 +604,7 @@ class LLMClient:
     def chat_simple(self, user_message: str, system_prompt: str = "") -> str:
         """简单对话（不使用工具）"""
         messages = [{"role": "user", "content": user_message}]
+        print(f"[DEBUG] chat_simple: model={self.config.model}, base_url={getattr(self.config, 'base_url', 'N/A')}")
         return self._client.chat(messages=messages, system=system_prompt)
 
 

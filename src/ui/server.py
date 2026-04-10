@@ -218,8 +218,15 @@ def reconstruct_traffic_flow():
                 model=model_name,
                 api_key=llm_api_key or os.getenv(f"{llm_provider.upper()}_API_KEY") or "dummy",
             )
+            # 设置 DeepSeek 的 base_url 和模型
+            if llm_provider == "deepseek":
+                config.base_url = "https://api.deepseek.com"
+                config.model = "deepseek-chat"  # 使用有效的模型名称
+
             llm_client = LLMClient(config)
-            print(f"[DEBUG] LLM Client created with provider={provider}, model={model_name}, api_key_set={bool(llm_api_key)}")
+            # 显示 API Key 前缀用于验证
+            key_prefix = config.api_key[:10] + "..." if config.api_key and len(config.api_key) > 10 else (config.api_key or "EMPTY")
+            print(f"[DEBUG] LLM Client created: provider={provider}, model={config.model}, api_key={key_prefix}, base_url={config.base_url}")
 
         context = AgentContext(map_api=map_api, llm_client=llm_client)
         tf_agent = TrafficFlowAgent(context, use_llm=use_llm)

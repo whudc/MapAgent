@@ -29,7 +29,7 @@ MapAgent/
 │   ├── models/                  # 数据模型
 │   │   ├── map_data.py          # 地图数据结构
 │   │   └── agent_io.py          # Agent 输入输出
-│   ├── ui/app.py                # Web UI
+│   ├── ui/server.py               # Flask Web 服务器
 │   └── utils/geo.py             # 地理计算工具
 ├── tests/                        # 测试
 ├── examples/                     # 使用示例
@@ -38,7 +38,6 @@ MapAgent/
 ├── config/                       # 配置
 │   └── settings.py              # 配置管理
 ├── generate_vector_map.py        # 地图生成脚本
-├── run_ui.py                     # UI 启动脚本
 └── requirements.txt              # 依赖
 ```
 
@@ -88,16 +87,29 @@ response = agent.chat("这个路口有几条车道？")
 print(response)
 ```
 
-### 交互式命令行
+## 快速开始
+
+### 方式一：统一启动脚本（推荐）
 
 ```bash
-python examples/chat.py
+# Web 可视化界面（默认）
+python run.py
+
+# 命令行对话模式
+python run.py chat
+
+# 显式指定 UI 模式
+python run.py ui
 ```
 
-### Web UI
+### 方式二：直接启动
 
 ```bash
-python run_ui.py
+# 交互式命令行
+python examples/chat.py
+
+# Web UI
+python -m src.ui.server
 ```
 
 访问 http://localhost:7860 使用 Web 界面。

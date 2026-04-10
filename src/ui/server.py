@@ -195,16 +195,31 @@ def reconstruct_traffic_flow():
                 os.environ["LOCAL_LLM_PORT"] = str(llm_port)
                 if llm_provider == "qwen":
                     os.environ["QWEN_BASE_URL"] = f"http://localhost:{llm_port}/v1"
+                    os.environ["LLM_MODEL"] = "Qwen3_5"
                 elif llm_provider == "gemma4":
                     os.environ["GEMMA4_BASE_URL"] = f"http://localhost:{llm_port}/v1"
+                    os.environ["LLM_MODEL"] = "Gemma4"
 
             # 创建 LLMConfig（即使没有 API Key 也尝试创建）
+            # 获取模型名
+            model_name = os.getenv("LLM_MODEL", "")
+            if not model_name:
+                default_models = {
+                    "deepseek": "deepseek-chat",
+                    "anthropic": "claude-sonnet-4-6",
+                    "openai": "gpt-4o",
+                    "qwen": "Qwen3_5",
+                    "gemma4": "Gemma4",
+                }
+                model_name = default_models.get(llm_provider, "")
+
             config = LLMConfig(
                 provider=provider,
+                model=model_name,
                 api_key=llm_api_key or os.getenv(f"{llm_provider.upper()}_API_KEY") or "dummy",
             )
             llm_client = LLMClient(config)
-            print(f"[DEBUG] LLM Client created with provider={provider}, api_key_set={bool(llm_api_key)}")
+            print(f"[DEBUG] LLM Client created with provider={provider}, model={model_name}, api_key_set={bool(llm_api_key)}")
 
         context = AgentContext(map_api=map_api, llm_client=llm_client)
         tf_agent = TrafficFlowAgent(context, use_llm=use_llm)
@@ -416,10 +431,12 @@ def chat():
             if provider == "qwen":
                 os.environ["QWEN_BASE_URL"] = f"http://localhost:{port}/v1"
                 os.environ["LLM_PROVIDER"] = "qwen_local"
+                os.environ["LLM_MODEL"] = "Qwen3_5"
                 api_key = "dummy"
             elif provider == "gemma4":
                 os.environ["GEMMA4_BASE_URL"] = f"http://localhost:{port}/v1"
                 os.environ["LLM_PROVIDER"] = "gemma4_local"
+                os.environ["LLM_MODEL"] = "Gemma4"
                 api_key = "dummy"
 
             chat.agent = create_master_agent(

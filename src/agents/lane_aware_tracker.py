@@ -1,10 +1,10 @@
 """
-车道感知的 DeepSORT 跟踪器 - 增强版
+Lane-Aware DeepSORT Tracker - Enhanced Version
 
-在标准 DeepSORT 基础上增加：
-1. 车道约束匹配 - 同一车道内的目标优先匹配
-2. 轨迹预测插值 - 减少闪烁
-3. 地图拓扑验证 - 验证轨迹是否符合车道连接关系
+Enhancements on top of standard DeepSORT:
+1. Lane-constrained matching - Prioritize matching targets in same lane
+2. Trajectory prediction interpolation - Reduce flicker
+3. Map topology validation - Validate trajectories against lane connections
 """
 
 import numpy as np
@@ -18,14 +18,14 @@ from .deepsort_tracker import (
 )
 
 
-# 为 Detection 添加 lane_id 属性
+# Add lane_id attribute to Detection
 if not hasattr(Detection, 'lane_id'):
     Detection.lane_id = None
 
 
 @dataclass
 class LaneInfo:
-    """车道信息"""
+    """Lane information"""
     lane_id: str
     centerline_coords: List[List[float]] = field(default_factory=list)
     boundary_coords: List[List[float]] = field(default_factory=list)
@@ -36,13 +36,13 @@ class LaneInfo:
 
 class LaneAwareTracker(DeepSORTTracker):
     """
-    车道感知的 DeepSORT 跟踪器
+    Lane-aware DeepSORT tracker
 
-    增强特性：
-    1. 车道约束匹配 - 同一车道内的目标优先匹配
-    2. 轨迹平滑插值 - 减少闪烁
-    3. 地图拓扑验证 - 验证轨迹是否符合车道连接关系
-    4. 遮挡处理 - 智能处理被遮挡的目标
+    Enhanced features:
+    1. Lane-constrained matching - Prioritize matching targets in same lane
+    2. Trajectory smoothing interpolation - Reduce flicker
+    3. Map topology validation - Validate trajectories against lane connections
+    4. Occlusion handling - Intelligently handle occluded targets
     """
 
     def __init__(self,
@@ -58,7 +58,7 @@ class LaneAwareTracker(DeepSORTTracker):
                  interpolation_enabled: bool = True,
                  max_interpolation_frames: int = 5,
                  ):
-        # 先存储 map_api（父类不存储）
+        # Store map_api first (parent class doesn't store)
         self.map_api = map_api
 
         super().__init__(
@@ -73,60 +73,60 @@ class LaneAwareTracker(DeepSORTTracker):
             max_lane_distance=max_lane_distance,
         )
 
-        # 车道感知配置
+        # Lane-aware configuration
         self.use_map = use_map
         self.lane_weight = lane_weight
         self.max_lane_distance = max_lane_distance
 
-        # 插值配置
+        # Interpolation configuration
         self.interpolation_enabled = interpolation_enabled
         self.max_interpolation_frames = max_interpolation_frames
 
-        # 车道缓存
+        # Lane cache
         self._lane_cache: Dict[str, LaneInfo] = {}
 
-        # 轨迹的车道分配
+        # Track lane assignment
         self._track_lanes: Dict[int, str] = {}
 
-        # 插值轨迹存储
+        # Interpolated trajectory storage
         self._interpolated_tracks: Dict[int, List[Dict]] = {}
 
-        # 统计
+        # Statistics
         self._lane_stats: Dict[str, Dict] = {}
 
     def update(self, detections: List[Dict], frame_id: int) -> Dict[int, TrackedObject]:
         """
-        增强版更新流程
+        Enhanced update pipeline
 
-        1. 卡尔曼滤波预测
-        2. 重复检测过滤（NMS）
-        3. 车道约束匹配
-        4. 更新/创建/删除轨迹
-        5. 轨迹插值（减少闪烁）
+        1. Kalman filter prediction
+        2. Duplicate detection filtering (NMS)
+        3. Lane-constrained matching
+        4. Update/create/delete tracks
+        5. Trajectory interpolation (reduce flicker)
         """
         self.frame_count = frame_id
 
-        # 解析检测
+        # Parse detections
         parsed_dets = self._parse_detections(detections)
 
-        # 【新增】重复检测过滤 - 处理同一目标被误检成多个的情况
+        # [New] Duplicate detection filtering - Handle same target detected as multiple
         parsed_dets = self._remove_duplicate_detections(parsed_dets, frame_id)
 
-        # 为每个检测分配车道
+        # Assign lane to each detection
         if self.use_map and self.map_api:
             for det in parsed_dets:
                 det.lane_id = self._assign_lane_to_detection(det, frame_id)
 
-        # 转换为列表
+        # Convert to list
         track_list = list(self.tracks.values())
 
-        # 1. 卡尔曼滤波预测
+        # 1. Kalman filter prediction
         for track in track_list:
             if track.state == TrackState.DELETED:
                 continue
             self._predict_track(track)
 
-        # 2. 车道约束级联匹配
+        # 2. Lane-constrained cascade matching
         confirmed_track_indices = [
             i for i, t in enumerate(track_list)
             if t.state == TrackState.CONFIRMED
@@ -139,13 +139,13 @@ class LaneAwareTracker(DeepSORTTracker):
             )
             return cost_matrix
 
-        # 车道约束级联匹配
+        # Lane-constrained cascade matching
         matches_a, unmatched_tracks_a, unmatched_detections = matching_cascade(
             lane_gated_metric, self.max_distance, self.max_misses,
             track_list, parsed_dets, confirmed_track_indices
         )
 
-        # IOU 匹配（处理未确认的轨迹）
+        # IOU matching (handle unconfirmed tracks)
         iou_track_candidates = [
             i for i, t in enumerate(track_list)
             if not t.is_confirmed()
@@ -157,45 +157,45 @@ class LaneAwareTracker(DeepSORTTracker):
             iou_track_candidates, unmatched_detections
         )
 
-        # 合并匹配结果
+        # Merge matching results
         matches = matches_a + matches_b
         unmatched_tracks = list(set(unmatched_tracks_a) | set(unmatched_tracks_b))
 
-        # 更新统计
+        # Update statistics
         self.stats['matches'] += len(matches)
 
-        # 【新增】冲突检测与解决 - 处理一个检测匹配多个轨迹的情况
+        # [New] Conflict detection and resolution - Handle one detection matching multiple tracks
         matches = self._resolve_match_conflicts(matches, track_list, parsed_dets, frame_id)
 
-        # 3. 更新匹配的轨迹
+        # 3. Update matched tracks
         for track_idx, det_idx in matches:
             track = track_list[track_idx]
             self._update_track_with_lane(track, parsed_dets[det_idx], frame_id)
 
-        # 4. 标记未匹配的轨迹为 missed
+        # 4. Mark unmatched tracks as missed
         for track_idx in unmatched_tracks:
             track = track_list[track_idx]
             self._mark_track_missed(track)
 
-        # 5. 创建新轨迹
+        # 5. Create new tracks
         for det_idx in unmatched_detections:
             self._create_track_with_lane(parsed_dets[det_idx], frame_id)
 
-        # 6. 清理过期轨迹
+        # 6. Clean up expired tracks
         self._cleanup_tracks()
 
-        # 7. 轨迹插值（减少闪烁）
+        # 7. Trajectory interpolation (reduce flicker)
         if self.interpolation_enabled:
             self._interpolate_lost_tracks(frame_id)
 
-        # 更新统计
+        # Update statistics
         self.stats['active_tracks'] = len([t for t in self.tracks.values()
                                            if t.state != TrackState.DELETED])
 
         return self.get_active_tracks()
 
     def _assign_lane_to_detection(self, det: Detection, frame_id: int) -> Optional[str]:
-        """为检测分配车道 ID"""
+        """Assign lane ID to detection"""
         if not self.map_api:
             return None
 
@@ -212,29 +212,29 @@ class LaneAwareTracker(DeepSORTTracker):
                                       frame_id: int,
                                       nms_distance: float = 0.5) -> List[Detection]:
         """
-        去除重复检测（非极大值抑制）
+        Remove duplicate detections (Non-Maximum Suppression)
 
-        当同一位置出现多个几乎重叠的检测时，保留置信度最高的检测
+        When multiple detections overlap at same position, keep highest confidence
 
-        典型场景：
-        - 检测器在同一位置输出两个 bounding box
-        - 两个检测位置差异 < 0.5 米，类型相同
+        Typical scenarios:
+        - Detector outputs two bounding boxes at same position
+        - Two detections differ by < 0.5m, same type
 
         Args:
-            detections: 检测列表
-            frame_id: 当前帧 ID
-            nms_distance: NMS 距离阈值（米），默认 0.5 米
+            detections: Detection list
+            frame_id: Current frame ID
+            nms_distance: NMS distance threshold (meters), default 0.5m
 
         Returns:
-            过滤后的检测列表
+            Filtered detection list
         """
         if len(detections) <= 1:
             return detections
 
-        # 标记需要删除的检测索引
+        # Mark detection indices to remove
         to_remove = set()
 
-        # 按置信度排序（高的优先）
+        # Sort by confidence (highest first)
         sorted_indices = sorted(
             range(len(detections)),
             key=lambda i: detections[i].confidence,
@@ -248,7 +248,7 @@ class LaneAwareTracker(DeepSORTTracker):
             det_i = detections[i]
             pos_i = np.array(det_i.location[:2])
 
-            # 检查与后续检测的距离
+            # Check distance with subsequent detections
             for j in sorted_indices:
                 if j <= i or j in to_remove:
                     continue
@@ -258,15 +258,15 @@ class LaneAwareTracker(DeepSORTTracker):
 
                 dist = np.linalg.norm(pos_i - pos_j)
 
-                # 距离很近且类型相同，认为是同一目标的重复检测
+                # Very close distance and same type, consider duplicate
                 if dist < nms_distance and det_i.obj_type == det_j.obj_type:
-                    # 保留置信度高的，删除置信度低的
+                    # Keep higher confidence, remove lower
                     to_remove.add(j)
 
-        # 过滤掉重复检测
+        # Filter out duplicate detections
         filtered = [det for i, det in enumerate(detections) if i not in to_remove]
 
-        # 记录统计信息
+        # Record statistics
         if len(detections) != len(filtered):
             if not hasattr(self, '_nms_stats'):
                 self._nms_stats = {'total_removed': 0, 'frames_affected': 0}
@@ -281,23 +281,23 @@ class LaneAwareTracker(DeepSORTTracker):
                                        candidate_indices: List[int],
                                        frame_id: int) -> int:
         """
-        解决一个轨迹匹配多个检测的冲突
+        Resolve conflict when one track matches multiple detections
 
         Args:
-            track: 轨迹对象
-            detections: 检测列表
-            candidate_indices: 候选检测索引
-            frame_id: 当前帧 ID
+            track: Track object
+            detections: Detection list
+            candidate_indices: Candidate detection indices
+            frame_id: Current frame ID
 
         Returns:
-            最佳检测的索引
+            Best detection index
         """
         if not candidate_indices:
             return -1
         if len(candidate_indices) == 1:
             return candidate_indices[0]
 
-        # 计算每个候选检测的分数
+        # Calculate score for each candidate detection
         scores = []
         pred_pos = track.predicted_location()
 
@@ -305,21 +305,21 @@ class LaneAwareTracker(DeepSORTTracker):
             det = detections[idx]
             det_pos = np.array(det.location[:2])
 
-            # 距离分数（越近越好）
+            # Distance score (closer is better)
             dist = np.linalg.norm(pred_pos - det_pos)
             dist_score = np.exp(-dist / 3.0)
 
-            # 置信度分数
+            # Confidence score
             conf_score = det.confidence
 
-            # 类型一致性分数
+            # Type consistency score
             type_score = 1.0 if det.obj_type == track.obj_type else 0.5
 
-            # 综合分数
+            # Combined score
             total_score = dist_score * 0.5 + conf_score * 0.3 + type_score * 0.2
             scores.append((idx, total_score))
 
-        # 返回分数最高的检测
+        # Return detection with highest score
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores[0][0]
 
@@ -328,24 +328,24 @@ class LaneAwareTracker(DeepSORTTracker):
                                   detections: List[Detection],
                                   frame_id: int) -> List[Tuple[int, int]]:
         """
-        解决匹配冲突
+        Resolve matching conflicts
 
-        情况 1：一个轨迹匹配多个检测 → 选择最佳检测
-        情况 2：一个检测匹配多个轨迹 → 选择最佳轨迹
+        Case 1: One track matches multiple detections -> Select best detection
+        Case 2: One detection matches multiple tracks -> Select best track
 
         Args:
-            matches: 匹配对列表 (track_idx, det_idx)
-            tracks: 轨迹列表
-            detections: 检测列表
-            frame_id: 当前帧 ID
+            matches: Match pairs list (track_idx, det_idx)
+            tracks: Track list
+            detections: Detection list
+            frame_id: Current frame ID
 
         Returns:
-            解决冲突后的匹配对列表
+            Resolved match pairs list
         """
         if not matches:
             return matches
 
-        # 检测冲突：统计每个轨迹和检测的匹配次数
+        # Detect conflicts: count matches per track and detection
         track_matches: Dict[int, List[int]] = {}  # track_idx -> [det_idx, ...]
         det_matches: Dict[int, List[int]] = {}     # det_idx -> [track_idx, ...]
 
@@ -362,7 +362,7 @@ class LaneAwareTracker(DeepSORTTracker):
         used_tracks = set()
         used_dets = set()
 
-        # 优先处理一个轨迹匹配多个检测的情况
+        # Handle one track matching multiple detections first
         for track_idx, det_indices in track_matches.items():
             if len(det_indices) == 1:
                 continue
@@ -376,14 +376,14 @@ class LaneAwareTracker(DeepSORTTracker):
             used_tracks.add(track_idx)
             used_dets.add(best_det_idx)
 
-        # 处理一个检测匹配多个轨迹的情况
+        # Handle one detection matching multiple tracks
         for det_idx, track_indices in det_matches.items():
             if len(track_indices) == 1:
                 continue
             if det_idx in used_dets:
                 continue
 
-            # 选择最佳轨迹
+            # Select best track
             best_track_idx = self._select_best_track_for_detection(
                 detections[det_idx],
                 [tracks[i] for i in track_indices],
@@ -394,7 +394,7 @@ class LaneAwareTracker(DeepSORTTracker):
             used_tracks.add(best_track_idx)
             used_dets.add(det_idx)
 
-        # 添加没有冲突的匹配
+        # Add matches without conflicts
         for track_idx, det_idx in matches:
             if track_idx not in used_tracks and det_idx not in used_dets:
                 resolved_matches.append((track_idx, det_idx))
@@ -405,15 +405,15 @@ class LaneAwareTracker(DeepSORTTracker):
                                           candidates: List[TrackedObject],
                                           candidate_indices: List[int]) -> int:
         """
-        为一个检测选择最佳轨迹
+        Select best track for a detection
 
         Args:
-            detection: 检测对象
-            candidates: 候选轨迹列表
-            candidate_indices: 候选轨迹索引
+            detection: Detection object
+            candidates: Candidate track list
+            candidate_indices: Candidate track indices
 
         Returns:
-            最佳轨迹的索引
+            Best track index
         """
         if not candidates:
             return -1
@@ -426,17 +426,17 @@ class LaneAwareTracker(DeepSORTTracker):
         for i, track in enumerate(candidates):
             pred_pos = track.predicted_location()
 
-            # 距离分数
+            # Distance score
             dist = np.linalg.norm(pred_pos - det_pos)
             dist_score = np.exp(-dist / 3.0)
 
-            # 轨迹质量分数
+            # Track quality score
             quality_score = min(1.0, track.hits / 5.0)
 
-            # 状态分数（CONFIRMED 优先）
+            # State score (CONFIRMED preferred)
             state_score = 1.0 if track.is_confirmed() else 0.5
 
-            # 综合分数
+            # Combined score
             total_score = dist_score * 0.6 + quality_score * 0.25 + state_score * 0.15
             scores.append((candidate_indices[i], total_score))
 
@@ -447,7 +447,7 @@ class LaneAwareTracker(DeepSORTTracker):
                              detections: List[Detection],
                              track_indices: List[int],
                              detection_indices: List[int]) -> np.ndarray:
-        """车道感知的位置距离"""
+        """Lane-aware position distance"""
         cost_matrix = np.zeros((len(track_indices), len(detection_indices)))
 
         for i, track_idx in enumerate(track_indices):
@@ -459,24 +459,24 @@ class LaneAwareTracker(DeepSORTTracker):
                 det = detections[det_idx]
                 det_lane = getattr(det, 'lane_id', None)
 
-                # 基础位置距离
+                # Base position distance
                 dist = np.linalg.norm(pred_loc[:2] - det.location[:2])
 
-                # 车道约束惩罚
+                # Lane constraint penalty
                 lane_penalty = 0.0
                 if track_lane and det_lane and track_lane != det_lane:
-                    # 检查车道是否连通
+                    # Check if lanes are connected
                     if not self._are_lanes_connected(track_lane, det_lane):
-                        lane_penalty = self.lane_weight * 10.0  # 大幅增加代价
+                        lane_penalty = self.lane_weight * 10.0  # Significantly increase cost
 
                 cost_matrix[i, j] = dist + lane_penalty
 
         return cost_matrix
 
     def _are_lanes_connected(self, from_lane: str, to_lane: str) -> bool:
-        """检查两条车道是否连通"""
+        """Check if two lanes are connected"""
         if not self.map_api:
-            return True  # 没有地图时假设连通
+            return True  # Assume connected without map
 
         try:
             lane_info = self.map_api.get_lane_info(from_lane)
@@ -485,7 +485,7 @@ class LaneAwareTracker(DeepSORTTracker):
                 if to_lane in successors:
                     return True
 
-            # 反向检查
+            # Reverse check
             lane_info = self.map_api.get_lane_info(to_lane)
             if lane_info:
                 predecessors = lane_info.get('predecessor_ids', [])
@@ -501,15 +501,15 @@ class LaneAwareTracker(DeepSORTTracker):
                                       detections: List[Detection],
                                       track_indices: List[int],
                                       detection_indices: List[int]) -> np.ndarray:
-        """使用车道信息增强门控"""
-        # 先应用标准卡尔曼门控
+        """Enhanced gating with lane information"""
+        # Apply standard Kalman gating first
         cost_matrix = gate_cost_matrix(
             self.kf, cost_matrix, tracks, detections,
             track_indices, detection_indices,
             gated_cost=INFTY_COST
         )
 
-        # 应用车道约束
+        # Apply lane constraints
         gating_threshold = self.max_distance * 2.0
 
         for row, track_idx in enumerate(track_indices):
@@ -523,7 +523,7 @@ class LaneAwareTracker(DeepSORTTracker):
                 det = detections[det_idx]
                 det_lane = getattr(det, 'lane_id', None)
 
-                # 如果车道不连通且距离较远，门控掉
+                # If lanes not connected and distance is far, gate out
                 if det_lane and track_lane != det_lane:
                     if not self._are_lanes_connected(track_lane, det_lane):
                         if cost_matrix[row, col] > gating_threshold:
@@ -537,7 +537,7 @@ class LaneAwareTracker(DeepSORTTracker):
                                        track_indices: List[int],
                                        detection_indices: List[int]
                                        ) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
-        """车道约束的最小代价匹配"""
+        """Lane-constrained minimum cost matching"""
         from scipy.optimize import linear_sum_assignment
 
         if not track_indices or not detection_indices:
@@ -573,47 +573,47 @@ class LaneAwareTracker(DeepSORTTracker):
     def _update_track_with_lane(self, track: TrackedObject,
                                  detection: Detection,
                                  frame_id: int):
-        """更新轨迹并记录车道信息"""
-        # 标准更新
+        """Update track and record lane information"""
+        # Standard update
         self._update_track(track, detection, frame_id)
 
-        # 更新车道信息
+        # Update lane information
         det_lane = getattr(detection, 'lane_id', None)
         if det_lane:
             self._track_lanes[track.track_id] = det_lane
             track.obj_type = detection.obj_type
 
     def _create_track_with_lane(self, detection: Detection, frame_id: int):
-        """创建新轨迹并记录车道信息"""
+        """Create new track and record lane information"""
         self._create_track(detection, frame_id)
 
-        # 记录新车道的车道信息
+        # Record new track's lane information
         det_lane = getattr(detection, 'lane_id', None)
         if det_lane:
-            # 找到新创建的轨迹 ID
+            # Find newly created track ID
             new_track_id = self.next_track_id - 1
             self._track_lanes[new_track_id] = det_lane
 
     def _interpolate_lost_tracks(self, frame_id: int):
         """
-        对丢失的轨迹进行插值，减少闪烁
+        Interpolate lost tracks to reduce flicker
 
-        当轨迹短暂丢失时（< max_interpolation_frames），
-        使用卡尔曼预测位置进行插值，保持 ID 连续性
+        When track is briefly lost (< max_interpolation_frames),
+        use Kalman predicted position for interpolation, maintain ID continuity
         """
         for track_id, track in self.tracks.items():
             if track.state == TrackState.DELETED:
                 continue
 
             if track.time_since_update > 0 and track.time_since_update <= self.max_interpolation_frames:
-                # 轨迹短暂丢失，进行插值
+                # Track briefly lost, interpolate
                 if self.interpolation_enabled:
-                    # 使用卡尔曼预测位置
+                    # Use Kalman predicted position
                     pred_pos = track.predicted_location()
 
-                    # 检查预测位置是否在地图范围内
+                    # Check if predicted position is within map bounds
                     if self._is_position_valid(pred_pos):
-                        # 在插值缓存中记录
+                        # Record in interpolation cache
                         if track_id not in self._interpolated_tracks:
                             self._interpolated_tracks[track_id] = []
 
@@ -624,27 +624,27 @@ class LaneAwareTracker(DeepSORTTracker):
                             'is_interpolated': True
                         })
 
-                        # 更新轨迹历史（插入预测位置）
+                        # Update track history (insert predicted position)
                         track.positions.append(pred_pos.tolist())
                         track.velocities.append(track.predicted_velocity().tolist())
                         track.frame_ids.append(frame_id)
 
     def _is_position_valid(self, position: np.ndarray) -> bool:
-        """检查位置是否在有效范围内"""
+        """Check if position is within valid range"""
         if not self.map_api:
             return True
 
-        # 检查是否在地图边界内
+        # Check if within map boundaries
         try:
-            # 简单检查：位置不应超出地图范围
+            # Simple check: position should not exceed map bounds
             pos_2d = position[:2]
-            # 可以添加更复杂的边界检查
+            # Can add more complex boundary checks
             return True
         except Exception:
             return True
 
     def get_trajectory_with_interpolation(self, track_id: int) -> Optional[Dict]:
-        """获取包含插值数据的轨迹"""
+        """Get trajectory including interpolated data"""
         if track_id not in self.tracks:
             return None
 
@@ -660,7 +660,7 @@ class LaneAwareTracker(DeepSORTTracker):
         }
 
     def get_lane_statistics(self) -> Dict:
-        """获取车道级统计信息"""
+        """Get lane-level statistics"""
         lane_counts: Dict[str, int] = {}
 
         for track_id, lane_id in self._track_lanes.items():
@@ -675,7 +675,7 @@ class LaneAwareTracker(DeepSORTTracker):
         }
 
     def reset_lane_assignment(self):
-        """重置车道分配"""
+        """Reset lane assignment"""
         self._track_lanes.clear()
         self._interpolated_tracks.clear()
         self._lane_stats.clear()

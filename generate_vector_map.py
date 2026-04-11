@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-MapAgent 静态矢量地图生成器
+MapAgent Static Vector Map Generator
 
-遍历所有帧数据，合并重复数据，生成一个完整的静态矢量地图 JSON 文件。
+Traverse all frame data, merge duplicates, generate a complete static vector map JSON file.
 
-数据源:
-- result_4dline_V1: 车道线数据
-- result_traffic_sign_V1: 交通标志数据
-- result_traffic_light_V1: 交通灯数据
+Data sources:
+- result_4dline_V1: Lane line data
+- result_traffic_sign_V1: Traffic sign data
+- result_traffic_light_V1: Traffic light data
 
 输出: vector_map.json (单个合并后的静态地图)
 """
@@ -28,7 +28,7 @@ except ImportError:
     HAS_NUMPY = False
 
 
-# ==================== 数据模型 ====================
+# ==================== Data Models ====================
 
 class LaneType(str, Enum):
     SOLID = "solid"
@@ -52,7 +52,7 @@ class LaneColor(str, Enum):
 
 @dataclass
 class LaneLine:
-    """车道线"""
+    """Lane line"""
     id: str
     type: str
     color: str
@@ -71,7 +71,7 @@ class LaneLine:
 
 @dataclass
 class Centerline:
-    """车道中心线"""
+    """Lane centerline"""
     id: str
     coordinates: List[List[float]]
     left_boundary_id: Optional[str] = None
@@ -92,7 +92,7 @@ class Centerline:
 
 @dataclass
 class RoadMark:
-    """道路标记"""
+    """Road mark"""
     id: str
     type: str
     coordinates: List[List[float]]
@@ -109,7 +109,7 @@ class RoadMark:
 
 @dataclass
 class TrafficSign:
-    """交通标志"""
+    """Traffic sign"""
     id: str
     category: str
     function: Dict
@@ -130,7 +130,7 @@ class TrafficSign:
 
 @dataclass
 class Intersection:
-    """路口"""
+    """Intersection"""
     id: str
     center: List[float]
     lanes: Set[str] = field(default_factory=set)
@@ -230,7 +230,7 @@ def mean_position(coords: List[List[float]]) -> List[float]:
 # ==================== 数据合并器 ====================
 
 class VectorMapMerger:
-    """矢量地图合并器 - 合并所有帧的数据"""
+    """Vector map合并器 - 合并所有帧的数据"""
 
     def __init__(self):
         self.lane_lines: Dict[str, LaneLine] = {}
@@ -283,7 +283,7 @@ class VectorMapMerger:
         Args:
             coords: 局部坐标系中的坐标列表
             frame_idx: 帧索引
-            lane_data: 原始车道线数据（包含 ego2global_transformation_matrix）
+            lane_data: 原始Lane line data（包含 ego2global_transformation_matrix）
 
         Returns:
             全局坐标系中的坐标列表
@@ -313,7 +313,7 @@ class VectorMapMerger:
         # 获取 ego2global 变换矩阵
         ego_transform = lane_data.get('ego2global_transformation_matrix')
 
-        # 解析车道线
+        # 解析Lane line
         lanes = lane_data.get('lanelines_annotation', {}).get('lane', [])
         for lane in lanes:
             lane_id = str(lane.get('id', ''))
@@ -335,13 +335,13 @@ class VectorMapMerger:
             h = coords_hash(geo_3d)
 
             if h in self.lane_hash_map:
-                # 已存在相似车道线，跳过
+                # 已存在相似Lane line，跳过
                 existing_id = self.lane_hash_map[h]
                 # 但可以验证是否真的是同一条
                 if coords_similarity(self.lane_lines[existing_id].coordinates, geo_3d):
                     continue
 
-            # 添加新车道线
+            # 添加新Lane line
             self.lane_hash_map[h] = lane_id
             self.lane_lines[lane_id] = LaneLine(
                 id=lane_id,
@@ -351,7 +351,7 @@ class VectorMapMerger:
                 length=calculate_length(geo_3d)
             )
 
-        # 解析中心线和拓扑关系
+        # Parse centerlines和拓扑关系
         associations = lane_data.get('lanelines_annotation', {}).get('associations', [])
 
         # 构建车道 ID 到变换后坐标的映射
@@ -396,7 +396,7 @@ class VectorMapMerger:
                     successor_ids=set(successors)
                 )
 
-        # 解析道路标记
+        # 解析Road mark
         marks = lane_data.get('lanelines_annotation', {}).get('road_mark', [])
         for mark in marks:
             mark_id = str(mark.get('id', ''))
@@ -407,7 +407,7 @@ class VectorMapMerger:
             if not keypoints:
                 continue
 
-            # 道路标记用ID去重
+            # Road mark用ID去重
             if mark_id not in self.road_marks:
                 self.road_marks[mark_id] = RoadMark(
                     id=mark_id,
@@ -416,7 +416,7 @@ class VectorMapMerger:
                     semantic=semantic
                 )
 
-        # 解析交通标志
+        # 解析Traffic sign
         if sign_data:
             signs = sign_data.get('traffic_signs', [])
             for sign in signs:
@@ -426,7 +426,7 @@ class VectorMapMerger:
                 camera = outline.get('camera', '')
                 bbox = outline.get('bbox', [])
 
-                # 判断标志类别
+                # 判断Sign category
                 category = 'unknown'
                 if function:
                     if 'lane_direction_sign' in function:
@@ -436,7 +436,7 @@ class VectorMapMerger:
                     elif 'unclear' in function:
                         category = 'unclear'
 
-                # 交通标志按ID+camera去重
+                # Traffic sign按ID+camera去重
                 sign_key = f"{sign_id}_{camera}"
                 if sign_key not in self.traffic_signs:
                     self.traffic_signs[sign_key] = TrafficSign(
@@ -450,7 +450,7 @@ class VectorMapMerger:
         self.total_objects_seen += len(lanes) + len(associations)
 
     def build_intersections(self):
-        """根据拓扑关系构建路口"""
+        """根据拓扑关系构建Intersection"""
         # 找汇聚点
         junction_points = defaultdict(set)
 
@@ -463,11 +463,11 @@ class VectorMapMerger:
             for succ_id in cl.successor_ids:
                 junction_points[f"j_{succ_id}"].add(cl_id)
 
-        # 创建路口
+        # 创建Intersection
         int_id = 0
         for key, lane_ids in junction_points.items():
             if len(lane_ids) >= 3:
-                # 计算路口中心
+                # 计算Intersection中心
                 all_coords = []
                 for lid in lane_ids:
                     if lid in self.centerlines:
@@ -511,7 +511,7 @@ class VectorMapMerger:
 # ==================== 主处理流程 ====================
 
 def generate_static_map(data_dir: str, output_file: str):
-    """生成静态矢量地图"""
+    """生成静态Vector map"""
 
     lane_dir = os.path.join(data_dir, 'result_4dline_V1')
     sign_dir = os.path.join(data_dir, 'result_traffic_sign_V1')
@@ -532,10 +532,10 @@ def generate_static_map(data_dir: str, output_file: str):
         frame_name = os.path.basename(lane_file)
         sign_file = os.path.join(sign_dir, frame_name)
 
-        # 加载车道线数据
+        # 加载Lane line data
         lane_data = json.load(open(lane_file))
 
-        # 加载交通标志数据（如果存在）
+        # 加载Traffic sign data（如果存在）
         sign_data = None
         if os.path.exists(sign_file):
             sign_data = json.load(open(sign_file))

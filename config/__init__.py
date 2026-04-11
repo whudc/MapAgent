@@ -1,4 +1,4 @@
-"""配置模块"""
+"""Configuration module"""
 
 from .settings import Settings, settings
 

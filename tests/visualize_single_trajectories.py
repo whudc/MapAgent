@@ -1,5 +1,5 @@
 """
-单条轨迹可视化 - 每条轨迹单独生成图片与真值对比
+singleTrajectorycan - TrajectorysinglegenerationGraphvalueComparison
 """
 
 import sys
@@ -23,14 +23,14 @@ from utils.detection_loader import DetectionLoader
 
 
 def transform_point(point, matrix):
-    """将点从自车坐标系转换到世界坐标系"""
+    """PointFromvehiclesCoordinateTransformationtoCoordinate"""
     homo_point = np.array([point[0], point[1], point[2], 1.0])
     transformed = matrix @ homo_point
     return transformed[:3].tolist()
 
 
 def load_ground_truth(gt_dir: Path, num_frames: int = 50):
-    """加载真值数据并转换坐标系"""
+    """LoadvaluedataandTransformationCoordinate"""
     gt_files = sorted(gt_dir.glob('*.json'))[:num_frames]
 
     frames = []
@@ -66,7 +66,7 @@ def load_ground_truth(gt_dir: Path, num_frames: int = 50):
 
 
 def load_model_detections(detection_dir: str, num_frames: int = 50):
-    """加载模型检测结果"""
+    """LoadmodelsDetectionResult"""
     loader = DetectionLoader(detection_dir, enable_tracking=False)
     model_frames = loader.load_frames(0, num_frames)
 
@@ -89,7 +89,7 @@ def load_model_detections(detection_dir: str, num_frames: int = 50):
 
 
 def load_map(map_path: str = None) -> MapAPI:
-    """加载矢量地图"""
+    """LoadMap"""
     if map_path is None:
         map_path = Path(__file__).parent.parent / 'data' / 'vector_map.json'
 
@@ -100,9 +100,9 @@ def load_map(map_path: str = None) -> MapAPI:
 
 def find_best_matching_gt_track(pred_positions, gt_tracks, max_distance=10.0):
     """
-    找到与预测轨迹最匹配的真值轨迹
+    toPredictTrajectoryMatchingvalueTrajectory
 
-    基于起点附近的距离进行匹配
+    PointNearbyDistanceforMatching
     """
     if not pred_positions or not gt_tracks:
         return None, float('inf')
@@ -116,7 +116,7 @@ def find_best_matching_gt_track(pred_positions, gt_tracks, max_distance=10.0):
         if len(gt_positions) < 3:
             continue
 
-        # 计算预测起点与真值起点的距离
+        # computingPredictPointvaluePointDistance
         gt_start = np.array(gt_positions[0][1][:2])
         distance = np.linalg.norm(pred_start - gt_start)
 
@@ -139,19 +139,19 @@ def visualize_single_trajectory(
     map_api: MapAPI = None
 ):
     """
-    可视化单条轨迹与真值的对比
+    cansingleTrajectoryvalueComparison
 
     Args:
-        track_id: 预测轨迹 ID
-        pred_traj: 预测轨迹数据 (包含 positions, frame_ids 等)
-        gt_track_id: 匹配的真值轨迹 ID
-        gt_positions: 真值轨迹位置列表 [(frame_id, position), ...]
-        output_dir: 输出目录
-        map_api: 地图 API (可选，用于绘制车道线)
+        track_id: PredictTrajectory ID
+        pred_traj: PredictTrajectorydata (include positions, frame_ids etc.)
+        gt_track_id: MatchingvalueTrajectory ID
+        gt_positions: valueTrajectorylocationlist [(frame_id, position), ...]
+        output_dir: OutputDirectory
+        map_api: Map API (can，lanes)
     """
     fig, axes = plt.subplots(1, 3, figsize=(20, 6))
 
-    # 提取预测轨迹数据
+    # notificationPredictTrajectorydata
     pred_positions = pred_traj.get('positions', [])
     pred_frames = pred_traj.get('frame_ids', [])
     pred_type = pred_traj.get('type', 'Unknown')
@@ -160,14 +160,14 @@ def visualize_single_trajectory(
     if len(pred_positions) < 2:
         return None
 
-    # 颜色方案
-    pred_color = '#FF4444'  # 红色 - 预测
-    gt_color = '#44AA44'   # 绿色 - 真值
+    # ColorSolution
+    pred_color = '#FF4444'  #  - Predict
+    gt_color = '#44AA44'   #  - value
 
-    # ========== 子图 1: 轨迹对比 ==========
+    # ========== Graph 1: TrajectoryComparison ==========
     ax1 = axes[0]
 
-    # 绘制预测轨迹
+    # PredictTrajectory
     pred_xs = [p[0] for p in pred_positions]
     pred_ys = [p[1] for p in pred_positions]
     ax1.plot(pred_xs, pred_ys, color=pred_color, linewidth=3, label='Predicted', alpha=0.8)
@@ -176,7 +176,7 @@ def visualize_single_trajectory(
     ax1.scatter(pred_xs[-1], pred_ys[-1], c=pred_color, s=150, marker='x',
                 zorder=5, linewidth=3, label='Pred End')
 
-    # 绘制真值轨迹
+    # valueTrajectory
     if gt_positions:
         gt_xs = [p[1][0] for p in gt_positions]
         gt_ys = [p[1][1] for p in gt_positions]
@@ -187,7 +187,7 @@ def visualize_single_trajectory(
         ax1.scatter(gt_xs[-1], gt_ys[-1], c=gt_color, s=150, marker='x',
                     zorder=5, linewidth=3, label='GT End')
 
-    # 绘制车道线 (如果有地图)
+    # lanes (IfhaveMap)
     if map_api:
         _draw_lane_lines(ax1, map_api, alpha=0.3)
 
@@ -198,11 +198,11 @@ def visualize_single_trajectory(
     ax1.set_aspect('equal')
     ax1.grid(True, alpha=0.3)
 
-    # ========== 子图 2: X 坐标对比 ==========
+    # ========== Graph 2: X CoordinateComparison ==========
     ax2 = axes[1]
 
     if gt_positions:
-        # 对齐帧 ID
+        # on ID
         gt_frame_dict = {fp[0]: fp[1] for fp in gt_positions}
 
         pred_frame_xs = pred_frames
@@ -228,7 +228,7 @@ def visualize_single_trajectory(
     ax2.legend(loc='best', fontsize=10)
     ax2.grid(True, alpha=0.3)
 
-    # ========== 子图 3: Y 坐标对比 ==========
+    # ========== Graph 3: Y CoordinateComparison ==========
     ax3 = axes[2]
 
     if gt_positions:
@@ -255,7 +255,7 @@ def visualize_single_trajectory(
 
     plt.tight_layout()
 
-    # 生成文件名
+    # generationFile
     gt_suffix = f"_vs_GT{gt_track_id}" if gt_track_id else "_no_GT_match"
     filename = f"track_{track_id:04d}{gt_suffix}.png"
     output_path = output_dir / "single_trajectories" / filename
@@ -267,9 +267,9 @@ def visualize_single_trajectory(
 
 
 def _draw_lane_lines(ax, map_api, alpha=0.5):
-    """在轴上绘制车道线"""
+    """underaxislanes"""
     try:
-        # 获取所有车道线
+        # Gethavelanes
         lane_lines = map_api.map.lane_lines
 
         for lane_id, lane_data in lane_lines.items():
@@ -293,7 +293,7 @@ def _draw_lane_lines(ax, map_api, alpha=0.5):
 
             ax.plot(xs, ys, color=color, linewidth=linewidth, alpha=alpha)
     except Exception:
-        pass  # 如果绘制失败，静默跳过
+        pass  # Iffail，past
 
 
 def visualize_all_trajectories(
@@ -304,22 +304,22 @@ def visualize_all_trajectories(
     min_length: int = 10
 ):
     """
-    为所有轨迹生成单独的可视化对比图
+    haveTrajectorygenerationsinglecanComparisonGraph
 
     Args:
-        gt_tracks: 真值轨迹字典 {gt_id: [(frame_id, position), ...]}
-        result_with_map: 重建结果 (带地图)
-        output_dir: 输出目录
-        map_api: 地图 API
-        min_length: 最小轨迹长度
+        gt_tracks: valueTrajectoryDictionary {gt_id: [(frame_id, position), ...]}
+        result_with_map: centroidResult (Map)
+        output_dir: OutputDirectory
+        map_api: Map API
+        min_length: MinimumTrajectorylength
     """
     trajectories = result_with_map.get('trajectories', {})
 
-    # 创建输出目录
+    # CreateOutputDirectory
     single_dir = output_dir / "single_trajectories"
     single_dir.mkdir(exist_ok=True)
 
-    # 统计信息
+    # info
     stats = {
         'total': len(trajectories),
         'with_gt_match': 0,
@@ -337,7 +337,7 @@ def visualize_all_trajectories(
         if traj['length'] >= 20:
             stats['long_trajectories'] += 1
 
-        # 寻找匹配的真值轨迹
+        # MatchingvalueTrajectory
         gt_match, match_distance = find_best_matching_gt_track(
             traj['positions'], gt_tracks, max_distance=15.0
         )
@@ -349,7 +349,7 @@ def visualize_all_trajectories(
             stats['without_gt_match'] += 1
             gt_positions = None
 
-        # 生成可视化
+        # generationcan
         output_path = visualize_single_trajectory(
             track_id=track_id,
             pred_traj=traj,
@@ -363,7 +363,7 @@ def visualize_all_trajectories(
             status = f"GT:{gt_match}" if gt_match else "No GT match"
             print(f"  Track {track_id:4d} | Len: {traj['length']:3d} | {status} | {output_path.name}")
 
-    # 生成汇总统计
+    # generation
     summary_path = output_dir / "single_trajectories" / "visualization_summary.json"
     with open(summary_path, 'w', encoding='utf-8') as f:
         json.dump({

@@ -1,12 +1,18 @@
-.vscode/
+vscode/
 data/
-
+logs/
 model/
 test_output/
+test_output_comparison/
+test_output_gif/
 
 *.pyc
 *.csv
 *.json
 *.txt
+*.jpg
+*.png
+*.gif
 
 vllm/
+scripts/keep_gemma4_loaded.py

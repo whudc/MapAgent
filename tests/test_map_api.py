@@ -1,150 +1,150 @@
 """
-Map API 功能测试
+Map API FeatureTesting
 
-验证 Phase 2 实现的所有功能
+Validation Phase 2 achievinghaveFeature
 """
 
 import sys
 from pathlib import Path
 
-# 添加 src 到路径
+# Add src toPath
 src_path = Path(__file__).parent.parent / "src"
 sys.path.insert(0, str(src_path))
 
-from models.map_data import MapLoader
+from models.map_data import Map Loader
 from apis.map_api import MapAPI
 
 
 def test_basic_queries(api: MapAPI):
-    """测试基础查询"""
+    """Testingquery"""
     print("\n" + "=" * 60)
-    print("基础查询测试")
+    print("queryTesting")
     print("=" * 60)
 
-    # 获取地图概要
+    # GetMapwill
     summary = api.get_map_summary()
-    print(f"\n地图概要:")
-    print(f"  - 车道数: {summary['total_lanes']}")
-    print(f"  - 中心线数: {summary['total_centerlines']}")
-    print(f"  - 路口数: {summary['total_intersections']}")
+    print(f"\nMapwill:")
+    print(f"  - lanes: {summary['total_lanes']}")
+    print(f"  - Center: {summary['total_centerlines']}")
+    print(f"  - intersection: {summary['total_intersections']}")
 
-    # 获取车道信息
+    # Getlanesinfo
     lane_ids = api.get_all_lane_ids()[:3]
-    print(f"\n车道信息查询:")
+    print(f"\nlanesinfoquery:")
     for lane_id in lane_ids:
         info = api.get_lane_info(lane_id)
         if info:
-            print(f"  车道 {lane_id}:")
-            print(f"    - 类型: {info['type']}, 颜色: {info['color']}")
-            print(f"    - 长度: {info['length']:.1f}m")
-            print(f"    - 坐标点数: {len(info['coordinates'])}")
+            print(f"  lanes {lane_id}:")
+            print(f"    - type: {info['type']}, Color: {info['color']}")
+            print(f"    - length: {info['length']:.1f}m")
+            print(f"    - CoordinatePoint: {len(info['coordinates'])}")
 
-    # 获取路口信息
+    # Getintersectioninfo
     int_ids = api.get_all_intersection_ids()[:2]
-    print(f"\n路口信息查询:")
+    print(f"\nintersectioninfoquery:")
     for int_id in int_ids:
         info = api.get_intersection_info(int_id)
         if info:
-            print(f"  路口 {int_id}:")
-            print(f"    - 中心: [{info['center'][0]:.1f}, {info['center'][1]:.1f}]")
-            print(f"    - 关联车道数: {info['lane_count']}")
+            print(f"  intersection {int_id}:")
+            print(f"    - Center: [{info['center'][0]:.1f}, {info['center'][1]:.1f}]")
+            print(f"    - Associationlanes: {info['lane_count']}")
 
 
 def test_topology_queries(api: MapAPI):
-    """测试拓扑查询"""
+    """Testingquery"""
     print("\n" + "=" * 60)
-    print("拓扑查询测试")
+    print("queryTesting")
     print("=" * 60)
 
-    # 获取连接车道
+    # GetConnectlanes
     lane_ids = api.get_all_lane_ids()[:5]
-    print(f"\n连接车道查询:")
+    print(f"\nConnectlanesquery:")
     for lane_id in lane_ids:
         connected = api.get_connected_lanes(lane_id)
         if connected:
-            print(f"  车道 {lane_id}:")
-            print(f"    - 中心线ID: {connected['centerline_id']}")
-            print(f"    - 前驱数: {len(connected['predecessors'])}")
-            print(f"    - 后继数: {len(connected['successors'])}")
+            print(f"  lanes {lane_id}:")
+            print(f"    - CenterID: {connected['centerline_id']}")
+            print(f"    - before: {len(connected['predecessors'])}")
+            print(f"    - after: {len(connected['successors'])}")
             break
 
-    # 获取中心线信息
+    # GetCenterinfo
     cl_ids = api.get_all_centerline_ids()[:3]
-    print(f"\n中心线信息查询:")
+    print(f"\nCenterinfoquery:")
     for cl_id in cl_ids:
         info = api.get_centerline_info(cl_id)
         if info and (info['left_boundary_id'] or info['right_boundary_id']):
-            print(f"  中心线 {cl_id}:")
-            print(f"    - 左边界: {info['left_boundary_id']}")
-            print(f"    - 右边界: {info['right_boundary_id']}")
-            print(f"    - 前驱: {info['predecessor_ids'][:3]}")
-            print(f"    - 后继: {info['successor_ids'][:3]}")
+            print(f"  Center {cl_id}:")
+            print(f"    - leftBoundary: {info['left_boundary_id']}")
+            print(f"    - rightBoundary: {info['right_boundary_id']}")
+            print(f"    - before: {info['predecessor_ids'][:3]}")
+            print(f"    - after: {info['successor_ids'][:3]}")
             break
 
 
 def test_spatial_queries(api: MapAPI):
-    """测试空间查询"""
+    """TestingSpacequery"""
     print("\n" + "=" * 60)
-    print("空间查询测试")
+    print("SpacequeryTesting")
     print("=" * 60)
 
-    # 获取一个测试位置
+    # GetaTestinglocation
     lane_ids = api.get_all_lane_ids()
     if not lane_ids:
-        print("没有车道数据")
+        print("havelanesdata")
         return
 
     lane_info = api.get_lane_info(lane_ids[0])
     if not lane_info or not lane_info['coordinates']:
-        print("没有坐标数据")
+        print("haveCoordinatedata")
         return
 
-    # 使用车道中点作为测试位置
+    # UselanescenterPointTestinglocation
     coords = lane_info['coordinates']
     mid_idx = len(coords) // 2
     position = tuple(coords[mid_idx])
 
-    print(f"\n测试位置: ({position[0]:.1f}, {position[1]:.1f}, {position[2]:.1f})")
+    print(f"\nTestinglocation: ({position[0]:.1f}, {position[1]:.1f}, {position[2]:.1f})")
 
-    # 查找最近车道
+    # Findlanes
     nearest = api.find_nearest_lane(position, max_distance=100)
     if nearest:
-        print(f"\n最近车道:")
-        print(f"  - 车道ID: {nearest['lane_id']}")
-        print(f"  - 类型: {nearest['type']}")
-        print(f"  - 距离: {nearest['distance']}m")
+        print(f"\nlanes:")
+        print(f"  - lanesID: {nearest['lane_id']}")
+        print(f"  - type: {nearest['type']}")
+        print(f"  - Distance: {nearest['distance']}m")
 
-    # 查找最近中心线
+    # FindCenter
     nearest_cl = api.find_nearest_centerline(position, max_distance=100)
     if nearest_cl:
-        print(f"\n最近中心线:")
-        print(f"  - 中心线ID: {nearest_cl['centerline_id']}")
-        print(f"  - 距离: {nearest_cl['distance']}m")
+        print(f"\nCenter:")
+        print(f"  - CenterID: {nearest_cl['centerline_id']}")
+        print(f"  - Distance: {nearest_cl['distance']}m")
 
-    # 查找区域内车道
+    # Findareadomainincenterlanes
     lanes = api.find_lanes_in_area(position, radius=50)
-    print(f"\n区域内车道 (半径50m): {len(lanes)}条")
+    print(f"\nareadomainincenterlanes (Radius50m): {len(lanes)}")
 
-    # 查找区域内路口
+    # Findareadomainincenterintersection
     intersections = api.find_intersections_in_area(position, radius=100)
-    print(f"区域内路口 (半径100m): {len(intersections)}个")
+    print(f"areadomainincenterintersection (Radius100m): {len(intersections)}")
 
-    # 区域统计
+    # areadomain
     stats = api.get_area_statistics(position, radius=100)
-    print(f"\n区域统计 (半径100m):")
-    print(f"  - 车道数: {stats['lane_count']}")
-    print(f"  - 中心线数: {stats['centerline_count']}")
-    print(f"  - 路口数: {stats['intersection_count']}")
-    print(f"  - 总车道长度: {stats['total_lane_length']}m")
+    print(f"\nareadomain (Radius100m):")
+    print(f"  - lanes: {stats['lane_count']}")
+    print(f"  - Center: {stats['centerline_count']}")
+    print(f"  - intersection: {stats['intersection_count']}")
+    print(f"  - laneslength: {stats['total_lane_length']}m")
 
 
 def test_vehicle_matching(api: MapAPI):
-    """测试车辆匹配"""
+    """TestingvehicleMatching"""
     print("\n" + "=" * 60)
-    print("车辆匹配测试")
+    print("vehicleMatchingTesting")
     print("=" * 60)
 
-    # 获取一个测试位置
+    # GetaTestinglocation
     lane_ids = api.get_all_lane_ids()
     if not lane_ids:
         return
@@ -154,36 +154,36 @@ def test_vehicle_matching(api: MapAPI):
         return
 
     coords = lane_info['coordinates']
-    # 在车道上找一个点，稍微偏移
+    # underlanesaPoint，
     test_pos = (coords[0][0] + 2, coords[0][1] + 2, coords[0][2])
 
-    print(f"\n测试位置: ({test_pos[0]:.1f}, {test_pos[1]:.1f})")
+    print(f"\nTestinglocation: ({test_pos[0]:.1f}, {test_pos[1]:.1f})")
 
-    # 匹配车辆到车道
+    # Matchingvehicletolanes
     match = api.match_vehicle_to_lane(test_pos, heading=45.0, max_distance=20)
     if match:
-        print(f"\n匹配结果:")
-        print(f"  - 中心线ID: {match['centerline_id']}")
-        print(f"  - 距离: {match['distance']}m")
-        print(f"  - 车道航向: {match['heading']}°")
-        print(f"  - 行驶方向: {'正向' if match['is_forward'] else '逆向'}")
+        print(f"\nMatchingResult:")
+        print(f"  - CenterID: {match['centerline_id']}")
+        print(f"  - Distance: {match['distance']}m")
+        print(f"  - lanesHeading: {match['heading']}°")
+        print(f"  - drivingDirection: {'regularto' if match['is_forward'] else 'to'}")
     else:
-        print("未匹配到车道")
+        print("notMatchingtolanes")
 
 
 def test_path_finding(api: MapAPI):
-    """测试路径查找"""
+    """TestingPathFind"""
     print("\n" + "=" * 60)
-    print("路径查找测试")
+    print("PathFindTesting")
     print("=" * 60)
 
-    # 找两个有连接关系的车道
+    # TwohaveConnectlanes
     cl_ids = api.get_all_centerline_ids()
     if len(cl_ids) < 2:
-        print("中心线数据不足")
+        print("Centerdatanot")
         return
 
-    # 找有后继的中心线
+    # haveafterCenter
     start_cl = None
     end_cl = None
 
@@ -195,12 +195,12 @@ def test_path_finding(api: MapAPI):
             break
 
     if not start_cl:
-        print("没有找到可连接的路径")
+        print("havetocanConnectPath")
         return
 
-    print(f"\n尝试从中心线 {start_cl} 到 {end_cl}")
+    print(f"\nFromCenter {start_cl} to {end_cl}")
 
-    # 需要车道ID
+    # neededlanesID
     start_info = api.get_centerline_info(start_cl)
     start_lane = start_info['right_boundary_id'] or start_info['left_boundary_id'] or start_cl
 
@@ -209,26 +209,26 @@ def test_path_finding(api: MapAPI):
 
     path = api.find_path_between_lanes(start_lane, end_lane)
     if path:
-        print(f"找到路径: {' -> '.join(path)}")
+        print(f"toPath: {' -> '.join(path)}")
     else:
-        print("未找到路径")
+        print("nottoPath")
 
 
 def main():
     print("=" * 60)
-    print("MapAgent Phase 2 测试")
+    print("MapAgent Phase 2 Testing")
     print("=" * 60)
 
-    # 加载地图
+    # LoadMap
     map_path = Path(__file__).parent.parent / "data" / "vector_map.json"
     if not map_path.exists():
-        print(f"错误: 地图文件不存在 {map_path}")
+        print(f"Error: MapFilenotunder {map_path}")
         return
 
-    print(f"\n加载地图: {map_path}")
+    print(f"\nLoadMap: {map_path}")
     api = MapAPI(map_file=str(map_path))
 
-    # 运行测试
+    # RunTesting
     test_basic_queries(api)
     test_topology_queries(api)
     test_spatial_queries(api)
@@ -236,7 +236,7 @@ def main():
     test_path_finding(api)
 
     print("\n" + "=" * 60)
-    print("所有测试完成")
+    print("haveTestingto")
     print("=" * 60)
 
 

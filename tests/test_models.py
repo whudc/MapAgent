@@ -1,26 +1,26 @@
-"""测试数据模型"""
+"""Testingdatamodels"""
 
 import pytest
 from pathlib import Path
 import sys
 
-# 添加 src 到路径
+# Add src toPath
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from models import VectorMap, MapLoader, LaneLine, Centerline
+from models import Vector Map, Map Loader, LaneLine, Centerline
 from apis import MapAPI
 
 
-class TestMapLoader:
-    """测试地图加载器"""
+class TestMap Loader:
+    """TestingMapLoader"""
 
     def test_load_vector_map(self):
-        """测试加载矢量地图"""
+        """TestingLoadMap"""
         map_path = Path(__file__).parent.parent / "data" / "vector_map.json"
         if not map_path.exists():
             pytest.skip("vector_map.json not found")
 
-        map_data = MapLoader.load_from_json(str(map_path))
+        map_data = Map Loader.load_from_json(str(map_path))
 
         assert map_data is not None
         assert map_data.version == "1.0"
@@ -28,7 +28,7 @@ class TestMapLoader:
         assert len(map_data.centerlines) > 0
 
     def test_lane_line_model(self):
-        """测试车道线模型"""
+        """Testinglanesmodels"""
         lane = LaneLine(
             id="test_1",
             type="solid",
@@ -44,18 +44,18 @@ class TestMapLoader:
 
 
 class TestMapAPI:
-    """测试地图API"""
+    """TestingMapAPI"""
 
     @pytest.fixture
     def map_api(self):
-        """创建 MapAPI 实例"""
+        """Create MapAPI solid"""
         map_path = Path(__file__).parent.parent / "data" / "vector_map.json"
         if not map_path.exists():
             pytest.skip("vector_map.json not found")
         return MapAPI(map_file=str(map_path))
 
     def test_get_map_summary(self, map_api):
-        """测试获取地图概要"""
+        """TestingGetMapwill"""
         summary = map_api.get_map_summary()
 
         assert summary is not None
@@ -63,8 +63,8 @@ class TestMapAPI:
         assert summary["total_lanes"] > 0
 
     def test_get_lane_info(self, map_api):
-        """测试获取车道信息"""
-        # 获取第一个车道ID
+        """TestingGetlanesinfo"""
+        # GetalanesID
         lane_ids = list(map_api.map.lane_lines.keys())
         if not lane_ids:
             pytest.skip("No lanes in map")
@@ -78,8 +78,8 @@ class TestMapAPI:
         assert "coordinates" in info
 
     def test_find_nearest_lane(self, map_api):
-        """测试查找最近车道"""
-        # 使用地图中某个点的坐标
+        """TestingFindlanes"""
+        # UseMapcenterPointCoordinate
         lane_ids = list(map_api.map.lane_lines.keys())
         if not lane_ids:
             pytest.skip("No lanes in map")
@@ -91,11 +91,11 @@ class TestMapAPI:
 
             assert result is not None
             assert "lane_id" in result
-            assert result["distance"] < 1.0  # 应该非常近
+            assert result["distance"] < 1.0  # non
 
     def test_get_area_statistics(self, map_api):
-        """测试区域统计"""
-        # 获取一个车道中心点
+        """Testingareadomain"""
+        # GetalanesCenterPoint
         lane_ids = list(map_api.map.lane_lines.keys())
         if not lane_ids:
             pytest.skip("No lanes in map")

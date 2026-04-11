@@ -1,7 +1,7 @@
 """
-交通流重建测试
+trafficcentroidTesting
 
-测试 TrafficFlowAgent 的轨迹重建效果（与 UI 使用方式一致）
+Testing TrafficFlowAgent Trajectorycentroideffective（ UI Usea）
 """
 
 import sys
@@ -25,7 +25,7 @@ from apis.map_api import MapAPI
 
 
 def get_vehicle_color(obj_type: str) -> str:
-    """根据车辆类型返回颜色"""
+    """RootvehicletypeReturnColor"""
     colors = {
         'Vehicle': 'blue',
         'Bus': 'orange',
@@ -38,7 +38,7 @@ def get_vehicle_color(obj_type: str) -> str:
 
 
 def get_lane_color(line_color: str) -> str:
-    """根据车道线颜色返回 matplotlib 颜色"""
+    """RootlanesColorReturn matplotlib Color"""
     colors = {
         'yellow': 'gold',
         'white': 'gray',
@@ -48,7 +48,7 @@ def get_lane_color(line_color: str) -> str:
 
 
 def get_lane_style(lane_type: str) -> tuple:
-    """根据车道线类型返回线型"""
+    """RootlanestypeReturn"""
     styles = {
         'solid': ('-', 2),
         'dashed': ('--', 2),
@@ -62,7 +62,7 @@ def get_lane_style(lane_type: str) -> tuple:
 
 
 def draw_map(ax, map_api: Optional[MapAPI], x_range: tuple = None, y_range: tuple = None):
-    """绘制地图（仅车道边界）"""
+    """Map（lanesBoundary）"""
     if map_api is None:
         return
 
@@ -99,16 +99,16 @@ def draw_trajectories(ax, trajectories: Dict, map_api: Optional[MapAPI],
                      title: str = "", min_length: int = 5,
                      x_range: tuple = None, y_range: tuple = None):
     """
-    绘制轨迹和地图
+    TrajectoryandMap
 
     Args:
-        ax: matplotlib 轴
-        trajectories: 轨迹字典 {track_id: trajectory_data}
-        map_api: 地图 API
-        title: 标题
-        min_length: 最小轨迹长度
-        x_range: X 轴范围
-        y_range: Y 轴范围
+        ax: matplotlib axis
+        trajectories: TrajectoryDictionary {track_id: trajectory_data}
+        map_api: Map API
+        title: 
+        min_length: MinimumTrajectorylength
+        x_range: X axisRange
+        y_range: Y axisRange
     """
     ax.clear()
     ax.set_title(title, fontsize=12, fontweight='bold')
@@ -116,7 +116,7 @@ def draw_trajectories(ax, trajectories: Dict, map_api: Optional[MapAPI],
     ax.set_ylabel('Y (m)')
     ax.grid(True, alpha=0.3)
 
-    # 先绘制地图
+    # Map
     draw_map(ax, map_api, x_range, y_range)
 
     if not trajectories:
@@ -139,16 +139,16 @@ def draw_trajectories(ax, trajectories: Dict, map_api: Optional[MapAPI],
 
         color = colors[idx % len(colors)]
 
-        # 绘制轨迹线
+        # Trajectory
         ax.plot(xs, ys, color=color, linewidth=2, alpha=0.8, label=f'#{track_id}')
 
-        # 绘制起点和终点
+        # PointandPoint
         ax.scatter(xs[0], ys[0], c=[color], s=80, marker='o', zorder=5,
                   edgecolors='white', linewidth=1.5, label='_nolegend_')
         ax.scatter(xs[-1], ys[-1], c=[color], s=80, marker='x', zorder=5,
                   linewidth=2, label='_nolegend_')
 
-    # 添加图例说明
+    # AddGraphDescription
     if trajectories:
         from matplotlib.lines import Line2D
         legend_elements = [
@@ -159,7 +159,7 @@ def draw_trajectories(ax, trajectories: Dict, map_api: Optional[MapAPI],
         ]
         ax.legend(handles=legend_elements, loc='upper right', fontsize=9)
 
-    # 设置坐标范围
+    # SetCoordinateRange
     if all_x and all_y and not x_range:
         margin = 15
         x_min, x_max = min(all_x) - margin, max(all_x) + margin
@@ -169,7 +169,7 @@ def draw_trajectories(ax, trajectories: Dict, map_api: Optional[MapAPI],
 
 
 def load_model_detections(detection_dir: str, num_frames: int = 50):
-    """加载模型检测结果"""
+    """LoadmodelsDetectionResult"""
     loader = DetectionLoader(detection_dir, enable_tracking=False)
     model_frames = loader.load_frames(0, num_frames)
 
@@ -192,10 +192,10 @@ def load_model_detections(detection_dir: str, num_frames: int = 50):
 
 
 def visualize_results(result: dict, map_api: Optional[MapAPI], output_dir: Path, min_length: int = 10):
-    """可视化所有轨迹（结合地图）"""
+    """canhaveTrajectory（iterationMap）"""
     trajectories = result.get('trajectories', {})
 
-    # 汇总图（带地图）
+    # Graph（Map）
     fig, ax = plt.subplots(1, 1, figsize=(14, 12))
     draw_trajectories(ax, trajectories, map_api,
                      title=f'Traffic Flow Reconstruction ({len(trajectories)} tracks)',
@@ -206,7 +206,7 @@ def visualize_results(result: dict, map_api: Optional[MapAPI], output_dir: Path,
     print(f"Saved overview with map: {output_path}")
     plt.close()
 
-    # 单条轨迹图（带地图）
+    # singleTrajectoryGraph（Map）
     single_dir = output_dir / "single_trajectories"
     single_dir.mkdir(exist_ok=True)
 
@@ -230,7 +230,7 @@ def visualize_results(result: dict, map_api: Optional[MapAPI], output_dir: Path,
         count += 1
         print(f"  Track {track_id:4d} | Len: {traj['length']:3d} | Type: {traj.get('type', 'Unknown')}")
 
-    # 保存汇总统计
+    # Save
     stats = {
         'total': len(trajectories),
         f'>= {min_length} frames': count,
@@ -282,22 +282,22 @@ def main():
         print(f"  Warning: Map file not found ({map_file}), proceeding without map")
         map_api = None
 
-    # 使用 Agent 方式重建（与 UI 一致）
+    # Use Agent centroid（ UI a）
     print("\n" + "=" * 70)
-    print("Method 1: TrafficFlowAgent.process() (与 UI 一致)")
+    print("Method 1: TrafficFlowAgent.process() ( UI a)")
     print("=" * 70)
 
-    # 创建 Agent 上下文
+    # Create Agent text
     context = AgentContext(map_api=map_api, llm_client=None)
 
-    # 创建 Agent（use_llm=False，纯 DeepSORT 模式）
+    # Create Agent（use_llm=False， DeepSORT ）
     agent = TrafficFlowAgent(context, use_llm=False)
     print(f"  Agent created: {agent.name}")
 
-    # 调用 process 方法（与 UI 调用方式一致）
+    #  process Method（ UI a）
     print(f"\n  Running reconstruction via process()...")
     result_agent = agent.process(
-        query="基于检测结果重建交通流",
+        query="DetectionResultcentroidtraffic",
         detection_path=detection_dir,
         start_frame=None,
         end_frame=None,
@@ -313,9 +313,9 @@ def main():
         print(f"  Failed: {result_agent.get('error', 'Unknown error')}")
         trajectories_agent = []
 
-    # 对比：使用便捷函数方式
+    # Comparison：Usefunction
     print("\n" + "=" * 70)
-    print("Method 2: reconstruct_traffic_flow() (便捷函数)")
+    print("Method 2: reconstruct_traffic_flow() (function)")
     print("=" * 70)
 
     # Load model detections for convenience function
@@ -335,7 +335,7 @@ def main():
     print(f"  Avg length: {np.mean(lengths_func):.1f} frames")
     print(f"  Max length: {max(lengths_func) if lengths_func else 0} frames")
 
-    # 打印 Agent 结果统计
+    # Print Agent Result
     print("\n" + "=" * 70)
     print("Agent Results Summary")
     print("=" * 70)
@@ -348,7 +348,7 @@ def main():
         print(f"  Tracks >= 10 frames: {sum(1 for l in lengths_agent if l >= 10)}")
         print(f"  Tracks >= 20 frames: {sum(1 for l in lengths_agent if l >= 20)}")
 
-    # Visualize (使用便捷函数的结果，因为格式兼容)
+    # Visualize (UsefunctionResult，)
     print("\nGenerating visualizations...")
     visualize_results(result_func, map_api, output_dir, min_length=10)
 

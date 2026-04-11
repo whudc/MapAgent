@@ -1,9 +1,9 @@
-"""MapAgent 源码包"""
+"""MapAgent Source package"""
 
 import sys
 from pathlib import Path
 
-# 确保模块导入
+# Ensure module import
 _root = Path(__file__).parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
@@ -38,7 +38,7 @@ from agents import (
 __version__ = "0.1.0"
 
 __all__ = [
-    # 数据模型
+    # Data models
     "LaneLine",
     "Centerline",
     "VectorMap",
@@ -52,7 +52,7 @@ __all__ = [
     "BehaviorResult",
     "PathQuery",
     "PathResult",
-    # 核心
+    # Core
     "LLMClient",
     "LLMConfig",
     "ToolRegistry",

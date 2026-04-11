@@ -1,7 +1,7 @@
 """
-DeepSORT 跟踪器测试
+DeepSORT TrackingerTesting
 
-测试纯 DeepSORT 跟踪器的效果
+Testing DeepSORT Trackingereffective
 """
 
 import sys
@@ -18,7 +18,7 @@ from utils.detection_loader import DetectionLoader
 
 
 def load_detections(detection_dir: str, num_frames: int = 50):
-    """加载检测数据"""
+    """LoadDetectiondata"""
     loader = DetectionLoader(detection_dir, enable_tracking=False)
     frames = loader.load_frames(0, num_frames)
 
@@ -44,7 +44,7 @@ def load_detections(detection_dir: str, num_frames: int = 50):
 
 
 def run_tracker(tracker, frames):
-    """运行跟踪器并返回结果"""
+    """RunTrackingerandReturnResult"""
     for frame_data in frames:
         frame_id = frame_data.get('frame_id', 0)
         objects = frame_data.get('objects', [])
@@ -67,13 +67,13 @@ def run_tracker(tracker, frames):
 
 
 def test_deepsort_tracker(frames):
-    """测试 DeepSORT 跟踪器"""
+    """Testing DeepSORT Trackinger"""
 
     print("\n" + "=" * 70)
     print("DeepSORT Tracker Test")
     print("=" * 70)
 
-    # DeepSORT (纯位置跟踪)
+    # DeepSORT (locationTracking)
     print("\n[DeepSORT - Pure Position Tracking]")
     tracker = DeepSORTTracker(
         map_api=None,
@@ -94,7 +94,7 @@ def test_deepsort_tracker(frames):
     print(f"  Avg track length: {stats.get('avg_track_length', 0):.1f}")
     print(f"  Max track length: {stats.get('max_track_length', 0)}")
 
-    # 计算轨迹长度分布
+    # computingTrajectorylength
     lengths = [t.age for t in tracks.values()]
     print("\n[Track Length Distribution]")
     print(f"  >= 5 frames: {sum(1 for l in lengths if l >= 5)}")
@@ -121,10 +121,10 @@ def main():
     frames = load_detections(detection_dir, num_frames)
     print(f"  Loaded {len(frames)} frames")
 
-    # 测试 DeepSORT 跟踪器
+    # Testing DeepSORT Trackinger
     results = test_deepsort_tracker(frames)
 
-    # 保存结果
+    # SaveResult
     output_dir = Path('test_output')
     output_dir.mkdir(exist_ok=True)
 

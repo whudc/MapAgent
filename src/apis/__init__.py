@@ -1,6 +1,6 @@
-"""MapAgent API 模块"""
+"""MapAgent API module"""
 
-# 延迟导入以避免循环依赖
+# Re-export
 def __getattr__(name):
     if name == "MapAPI":
         from .map_api import MapAPI

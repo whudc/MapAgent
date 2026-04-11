@@ -1,14 +1,14 @@
 """
-DeepSORT 跟踪器 - 简化版（纯位置跟踪）
+DeepSORT Tracker - Simplified Version (Pure Position Tracking)
 
-基于官方 deep_sort 实现，仅使用位置信息进行多目标跟踪
-参考：https://github.com/nwojke/deep_sort
+Based on official deep_sort implementation, uses only position information for multi-object tracking
+parameter：https://github.com/nwojke/deep_sort
 
-主要特性：
-1. 标准卡尔曼滤波（位置/速度）
-2. 级联匹配（按 time_since_update 分层）
-3. 马氏距离门控
-4. 位置距离匹配
+Main Features:
+1. Standard Kalman filter (position/velocity)
+2. Cascade matching (layered by time_since_update)
+3. Mahalanobis distance gating
+4. Position distance matching
 """
 
 import numpy as np
@@ -18,9 +18,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 
-# ==================== 常量定义 ====================
+# ==================== Constants ====================
 
-# 卡方分布 95% 分位数（用于马氏距离门控）
+#  95% bit（Mahalanobis distance gating）
 CHI2INV95 = {
     1: 3.8415,
     2: 5.9915,
@@ -36,27 +36,27 @@ CHI2INV95 = {
 INFTY_COST = 1e+5
 
 
-# ==================== 枚举和数据类 ====================
+# ==================== Enums and Data Classes ====================
 
 class TrackState(str, Enum):
-    """轨迹状态"""
-    TENTATIVE = "tentative"    # 试探状态
-    CONFIRMED = "confirmed"    # 确认状态
-    DELETED = "deleted"        # 已删除
+    """Track State"""
+    TENTATIVE = "tentative"    # Tentative state
+    CONFIRMED = "confirmed"    # Confirmed state
+    DELETED = "deleted"        # Deleted
 
 
 @dataclass
 class Detection:
-    """检测框数据（3D 位置格式）"""
-    location: np.ndarray           # 位置 [x, y, z]
-    velocity: np.ndarray           # 速度 [vx, vy, vz]
-    obj_type: str = "Unknown"      # 类型
-    heading: float = 0.0           # 航向角
-    speed: float = 0.0             # 速度大小
-    confidence: float = 1.0        # 置信度
+    """Detection box data (3D position format)"""
+    location: np.ndarray           # Position [x, y, z]
+    velocity: np.ndarray           # Velocity [vx, vy, vz]
+    obj_type: str = "Unknown"      # Type
+    heading: float = 0.0           # Heading angle
+    speed: float = 0.0             # Speed magnitude
+    confidence: float = 1.0        # Confidence
 
     def to_measurement(self) -> np.ndarray:
-        """转换为测量向量 [x, y, z]"""
+        """Convert to measurement vector [x, y, z]"""
         return np.array([
             self.location[0], self.location[1], self.location[2]
         ])
@@ -64,26 +64,26 @@ class Detection:
 
 @dataclass
 class TrackedObject:
-    """跟踪目标（DeepSORT Track）"""
+    """Tracked Object (DeepSORT Track)"""
     track_id: int
     state: TrackState = TrackState.TENTATIVE
 
-    # 卡尔曼滤波状态（6 维：x, y, z, vx, vy, vz）
+    # Kalman filter state (6D: x, y, z, vx, vy, vz)
     kf_mean: np.ndarray = field(default_factory=lambda: np.zeros(6))
     kf_covariance: np.ndarray = field(default_factory=lambda: np.eye(6) * 10)
 
-    # 历史数据
+    # Historical data
     positions: List[List[float]] = field(default_factory=list)
     velocities: List[List[float]] = field(default_factory=list)
     frame_ids: List[int] = field(default_factory=list)
 
-    # 属性
+    # Attributes
     obj_type: str = "Unknown"
 
-    # 统计
-    hits: int = 0                  # 总命中次数
-    age: int = 0                   # 轨迹年龄（帧数）
-    time_since_update: int = 0     # 自上次更新以来的帧数
+    # Statistics
+    hits: int = 0                  # Total hits
+    age: int = 0                   # Track age (frames)
+    time_since_update: int = 0     # Frames since last update
 
     @property
     def last_position(self) -> Optional[List[float]]:
@@ -94,11 +94,11 @@ class TrackedObject:
         return self.frame_ids[-1] if self.frame_ids else None
 
     def predicted_location(self) -> np.ndarray:
-        """获取预测位置"""
+        """Get predicted position"""
         return self.kf_mean[:3]
 
     def predicted_velocity(self) -> np.ndarray:
-        """获取预测速度"""
+        """Get predicted velocity"""
         return self.kf_mean[3:6]
 
     def is_confirmed(self) -> bool:
@@ -111,39 +111,39 @@ class TrackedObject:
         return self.state == TrackState.DELETED
 
 
-# ==================== 卡尔曼滤波器 ====================
+# ==================== Kalman Filter ====================
 
 class KalmanFilter:
     """
-    卡尔曼滤波器（基于官方 deep_sort 实现，适配 3D 位置）
+    Kalman Filter (based on official deep_sort implementation, adapted for 3D position)
 
-    状态向量：[x, y, z, vx, vy, vz] (6 维)
-    测量向量：[x, y, z] (3 维)
+    State vector: [x, y, z, vx, vy, vz] (6D)
+    Measurement vector: [x, y, z] (3D)
     """
 
     def __init__(self, dt: float = 0.1):
-        self.dt = dt  # 帧间隔
+        self.dt = dt  # Frame interval
 
-        # 状态转移矩阵 F (6x6)
-        ndim = 3  # 位置维度
+        # State transition matrix F (6x6)
+        ndim = 3  # Position dimension
         self._motion_mat = np.eye(2 * ndim, 2 * ndim)
         for i in range(ndim):
             self._motion_mat[i, ndim + i] = dt
 
-        # 观测矩阵 H (3x6)
+        # Observation matrix H (3x6)
         self._update_mat = np.eye(ndim, 2 * ndim)
 
-        # 相对不确定性权重（基于官方 deep_sort）
+        # Relative uncertainty weights (based on official deep_sort)
         self._std_weight_position = 1. / 20
         self._std_weight_velocity = 1. / 160
 
     def initiate(self, measurement: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """初始化轨迹"""
+        """Initialize trajectory"""
         mean_pos = measurement
         mean_vel = np.zeros_like(mean_pos)
         mean = np.r_[mean_pos, mean_vel]
 
-        # 初始化协方差（相对不确定性）
+        # Initialize covariance (relative uncertainty)
         ref_scale = max(np.linalg.norm(measurement[:2]), 1.0)
         std = [
             2 * self._std_weight_position * ref_scale,
@@ -156,8 +156,8 @@ class KalmanFilter:
         return mean, covariance
 
     def predict(self, mean: np.ndarray, covariance: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """预测步骤"""
-        # 使用位置来计算参考尺度（更稳定）
+        """Prediction step"""
+        # Use position to compute reference scale (more stable)
         ref_scale = max(np.linalg.norm(mean[:2]), 1.0)
         std_pos = [
             self._std_weight_position * ref_scale,
@@ -176,8 +176,8 @@ class KalmanFilter:
         return mean, covariance
 
     def project(self, mean: np.ndarray, covariance: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """将状态投影到测量空间"""
-        # 使用位置来计算参考尺度
+        """Project state to measurement space"""
+        # Use position to compute reference scale
         ref_scale = max(np.linalg.norm(mean[:2]), 1.0)
         std = [
             self._std_weight_position * ref_scale,
@@ -192,7 +192,7 @@ class KalmanFilter:
 
     def update(self, mean: np.ndarray, covariance: np.ndarray,
                measurement: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """更新步骤"""
+        """Update step"""
         projected_mean, projected_cov = self.project(mean, covariance)
 
         try:
@@ -218,7 +218,7 @@ class KalmanFilter:
     def gating_distance(self, mean: np.ndarray, covariance: np.ndarray,
                         measurements: np.ndarray,
                         only_position: bool = False) -> np.ndarray:
-        """计算马氏距离（用于门控）"""
+        """Compute Mahalanobis distance (for gating)"""
         mean, covariance = self.project(mean, covariance)
 
         if only_position:
@@ -240,13 +240,13 @@ class KalmanFilter:
         return squared_maha
 
 
-# ==================== 匹配算法 ====================
+# ==================== Matching Algorithms ====================
 
 def position_cost(tracks: List[TrackedObject], detections: List[Detection],
                   track_indices: Optional[List[int]] = None,
                   detection_indices: Optional[List[int]] = None,
                   max_distance: float = 5.0) -> np.ndarray:
-    """位置距离代价"""
+    """Position distance cost"""
     if track_indices is None:
         track_indices = list(range(len(tracks)))
     if detection_indices is None:
@@ -276,7 +276,7 @@ def min_cost_matching(
         track_indices: Optional[List[int]] = None,
         detection_indices: Optional[List[int]] = None
 ) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
-    """最小代价匹配（匈牙利算法）"""
+    """Minimum cost matching (Hungarian algorithm)"""
     from scipy.optimize import linear_sum_assignment
 
     if track_indices is None:
@@ -323,9 +323,9 @@ def matching_cascade(
         detection_indices: Optional[List[int]] = None
 ) -> Tuple[List[Tuple[int, int]], List[int], List[int]]:
     """
-    级联匹配（基于官方 deep_sort）
+    Cascade matching (based on official deep_sort)
 
-    按 time_since_update 分层匹配
+    Layered matching by time_since_update
     """
     if track_indices is None:
         track_indices = list(range(len(tracks)))
@@ -363,7 +363,7 @@ def gate_cost_matrix(
         gated_cost: float = INFTY_COST,
         only_position: bool = False,
 ) -> np.ndarray:
-    """使用卡尔曼滤波门控无效关联"""
+    """Gate invalid associations using Kalman filter"""
     gating_dim = 2 if only_position else 3
     gating_threshold = CHI2INV95[gating_dim]
 
@@ -389,17 +389,17 @@ def gate_cost_matrix(
     return cost_matrix
 
 
-# ==================== DeepSORT 跟踪器 ====================
+# ==================== DeepSORT Tracker ====================
 
 class DeepSORTTracker:
     """
-    DeepSORT 多目标跟踪器（简化版 - 纯位置跟踪）
+    DeepSORT Multi-Object Tracker (Simplified Version - Pure Position Tracking)
 
-    参数：
-    - max_distance: 位置距离最大阈值
-    - max_velocity: 最大速度（米/秒）
-    - min_hits: 确认轨迹需要的连续检测次数
-    - max_misses: 轨迹最大丢失帧数
+    Parameters:
+    - max_distance: Position distance maximum threshold
+    - max_velocity: Maximum velocity (m/s)
+    - min_hits: Number of consecutive detections to confirm track
+    - max_misses: Maximum frames a track can be lost
     """
 
     def __init__(self,
@@ -422,15 +422,15 @@ class DeepSORTTracker:
         self.max_misses = max_misses
         self.max_iou_distance = max_iou_distance
 
-        # 卡尔曼滤波器
+        # Kalman filter
         self.kf = KalmanFilter(dt=frame_interval)
 
-        # 轨迹管理
+        # Track management
         self.tracks: Dict[int, TrackedObject] = {}
         self.next_track_id = 1
         self.frame_count = 0
 
-        # 统计
+        # Statistics
         self.stats = {
             'total_tracks': 0,
             'active_tracks': 0,
@@ -442,27 +442,27 @@ class DeepSORTTracker:
 
     def update(self, detections: List[Dict], frame_id: int) -> Dict[int, TrackedObject]:
         """
-        DeepSORT 更新流程
+        DeepSORT update pipeline
 
-        1. 卡尔曼滤波预测
-        2. 级联匹配
-        3. 更新/创建/删除轨迹
+        1. Kalman filter prediction
+        2. Cascade matching
+        3. Update/Create/Delete tracks
         """
         self.frame_count = frame_id
 
-        # 解析检测
+        # ParseDetection
         parsed_dets = self._parse_detections(detections)
 
-        # 转换为列表
+        # Transformationlist
         track_list = list(self.tracks.values())
 
-        # 1. 卡尔曼滤波预测
+        # 1. Kalman filter prediction
         for track in track_list:
             if track.state == TrackState.DELETED:
                 continue
             self._predict_track(track)
 
-        # 2. 级联匹配 - 只匹配 CONFIRMED 轨迹
+        # 2. Cascade matching - Matching CONFIRMED Trajectory
         confirmed_track_indices = [
             i for i, t in enumerate(track_list)
             if t.state == TrackState.CONFIRMED
@@ -476,13 +476,13 @@ class DeepSORTTracker:
             )
             return cost_matrix
 
-        # 级联匹配
+        # Cascade matching
         matches_a, unmatched_tracks_a, unmatched_detections = matching_cascade(
             gated_metric, self.max_distance, self.max_misses,
             track_list, parsed_dets, confirmed_track_indices
         )
 
-        # IOU 匹配（处理未确认的轨迹）
+        # IOU Matching（ProcessnotcorrectTrajectory）
         iou_track_candidates = [
             i for i, t in enumerate(track_list)
             if not t.is_confirmed()
@@ -494,38 +494,38 @@ class DeepSORTTracker:
             iou_track_candidates, unmatched_detections
         )
 
-        # 合并匹配结果
+        # MergeMatchingResult
         matches = matches_a + matches_b
         unmatched_tracks = list(set(unmatched_tracks_a) | set(unmatched_tracks_b))
 
-        # 更新统计
+        # UpdateStatistics
         self.stats['matches'] += len(matches)
 
-        # 3. 更新匹配的轨迹
+        # 3. UpdateMatchingTrajectory
         for track_idx, det_idx in matches:
             track = track_list[track_idx]
             self._update_track(track, parsed_dets[det_idx], frame_id)
 
-        # 4. 标记未匹配的轨迹为 missed
+        # 4. notMatchingTrajectory missed
         for track_idx in unmatched_tracks:
             track = track_list[track_idx]
             self._mark_track_missed(track)
 
-        # 5. 创建新轨迹
+        # 5. Create new track
         for det_idx in unmatched_detections:
             self._create_track(parsed_dets[det_idx], frame_id)
 
-        # 6. 清理过期轨迹
+        # 6. pastTrajectory
         self._cleanup_tracks()
 
-        # 更新统计
+        # UpdateStatistics
         self.stats['active_tracks'] = len([t for t in self.tracks.values()
                                            if t.state != TrackState.DELETED])
 
         return self.get_active_tracks()
 
     def _parse_detections(self, detections: List[Dict]) -> List[Detection]:
-        """解析检测数据"""
+        """Parse detection data"""
         parsed = []
         for det in detections:
             pos = det.get('location') or det.get('position')
@@ -548,7 +548,7 @@ class DeepSORTTracker:
 
     def _position_distance(self, tracks: List[TrackedObject], detections: List[Detection],
                           track_indices: List[int], detection_indices: List[int]) -> np.ndarray:
-        """计算位置距离"""
+        """Compute position distance"""
         cost_matrix = np.zeros((len(track_indices), len(detection_indices)))
 
         for i, track_idx in enumerate(track_indices):
@@ -563,7 +563,7 @@ class DeepSORTTracker:
         return cost_matrix
 
     def _predict_track(self, track: TrackedObject):
-        """预测轨迹状态"""
+        """PredictTrack State"""
         track.kf_mean, track.kf_covariance = self.kf.predict(
             track.kf_mean, track.kf_covariance
         )
@@ -571,28 +571,28 @@ class DeepSORTTracker:
         track.time_since_update += 1
 
     def _update_track(self, track: TrackedObject, detection: Detection, frame_id: int):
-        """更新轨迹"""
+        """Update track"""
         measurement = detection.to_measurement()
         track.kf_mean, track.kf_covariance = self.kf.update(
             track.kf_mean, track.kf_covariance, measurement
         )
 
-        # 更新历史
+        # Update history
         track.positions.append(detection.location.tolist())
         track.velocities.append(detection.velocity.tolist())
         track.frame_ids.append(frame_id)
         track.obj_type = detection.obj_type
 
-        # 更新统计
+        # UpdateStatistics
         track.hits += 1
         track.time_since_update = 0
 
-        # 状态转换
+        # State transition
         if track.state == TrackState.TENTATIVE and track.hits >= self.min_hits:
             track.state = TrackState.CONFIRMED
 
     def _mark_track_missed(self, track: TrackedObject):
-        """标记轨迹丢失"""
+        """Mark track as lost"""
         track.time_since_update += 1
         self.stats['misses'] += 1
 
@@ -603,7 +603,7 @@ class DeepSORTTracker:
             self.stats['deleted_tracks'] += 1
 
     def _create_track(self, detection: Detection, frame_id: int):
-        """创建新轨迹"""
+        """Create new track"""
         measurement = detection.to_measurement()
         mean, covariance = self.kf.initiate(measurement)
 
@@ -627,24 +627,24 @@ class DeepSORTTracker:
         self.next_track_id += 1
 
     def _cleanup_tracks(self):
-        """清理已删除的轨迹"""
+        """DeletedTrajectory"""
         to_delete = [tid for tid, t in self.tracks.items()
                     if t.state == TrackState.DELETED]
         for tid in to_delete:
             del self.tracks[tid]
 
     def get_active_tracks(self) -> Dict[int, TrackedObject]:
-        """获取活跃轨迹"""
+        """Get active tracks"""
         return {tid: t for tid, t in self.tracks.items()
                 if t.state != TrackState.DELETED}
 
     def get_confirmed_tracks(self) -> Dict[int, TrackedObject]:
-        """获取确认状态的轨迹"""
+        """GetConfirmed stateTrajectory"""
         return {tid: t for tid, t in self.tracks.items()
                 if t.state == TrackState.CONFIRMED}
 
     def get_statistics(self) -> Dict:
-        """获取统计信息"""
+        """GetStatisticsinfo"""
         active = self.get_active_tracks()
         lengths = [t.age for t in active.values()]
 

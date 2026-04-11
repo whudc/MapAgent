@@ -1,5 +1,5 @@
 # vim: expandtab:ts=4:sw=4
-"""DeepSORT 多目标跟踪模块"""
+"""DeepSORT Target Tracking module"""
 
 from .detection import Detection
 from .track import Track, TrackState

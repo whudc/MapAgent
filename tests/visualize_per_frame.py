@@ -1,9 +1,9 @@
 """
-每帧可视化脚本
+canScript
 
-生成每帧的双子图对比：
-1. 检测结果 + 地图
-2. 跟踪结果 + 地图
+generationdoubleGraphComparison：
+1. DetectionResult + Map
+2. TrackingResult + Map
 """
 
 import sys
@@ -21,11 +21,11 @@ sys.path.insert(0, str(project_root / "src"))
 from utils.detection_loader import DetectionLoader
 from agents.deepsort_tracker import DeepSORTTracker
 from apis.map_api import MapAPI
-from models.map_data import MapLoader
+from models.map_data import Map Loader
 
 
 def get_vehicle_color(obj_type: str) -> str:
-    """根据车辆类型返回颜色"""
+    """RootvehicletypeReturnColor"""
     colors = {
         'Vehicle': 'blue',
         'Bus': 'orange',
@@ -38,7 +38,7 @@ def get_vehicle_color(obj_type: str) -> str:
 
 
 def get_vehicle_size(obj_type: str) -> tuple:
-    """根据车辆类型返回绘制尺寸"""
+    """RootvehicletypeReturn"""
     sizes = {
         'Vehicle': (4.5, 2.0),
         'Bus': (10.0, 2.5),
@@ -51,7 +51,7 @@ def get_vehicle_size(obj_type: str) -> tuple:
 
 
 def get_lane_color(line_color: str) -> str:
-    """根据车道线颜色返回 matplotlib 颜色"""
+    """RootlanesColorReturn matplotlib Color"""
     colors = {
         'yellow': 'gold',
         'white': 'gray',
@@ -61,7 +61,7 @@ def get_lane_color(line_color: str) -> str:
 
 
 def get_lane_style(lane_type: str) -> tuple:
-    """根据车道线类型返回线型"""
+    """RootlanestypeReturn"""
     styles = {
         'solid': ('-', 2),
         'dashed': ('--', 2),
@@ -76,13 +76,13 @@ def get_lane_style(lane_type: str) -> tuple:
 
 def draw_map(ax, map_api: Optional[MapAPI], x_range: tuple = None, y_range: tuple = None):
     """
-    绘制地图（仅车道边界，不绘制中心线）
+    Map（lanesBoundary，notCenter）
 
     Args:
-        ax: matplotlib 轴
-        map_api: 地图 API
-        x_range: X 轴范围 (min, max)
-        y_range: Y 轴范围 (min, max)
+        ax: matplotlib axis
+        map_api: Map API
+        x_range: X axisRange (min, max)
+        y_range: Y axisRange (min, max)
     """
     if map_api is None:
         return
@@ -90,7 +90,7 @@ def draw_map(ax, map_api: Optional[MapAPI], x_range: tuple = None, y_range: tupl
     all_x = []
     all_y = []
 
-    # 绘制所有车道线（边界线）
+    # havelanes（Boundary）
     for lane_id, lane in map_api.map.lane_lines.items():
         coords = lane.coordinates
         if not coords:
@@ -106,7 +106,7 @@ def draw_map(ax, map_api: Optional[MapAPI], x_range: tuple = None, y_range: tupl
 
         ax.plot(x_vals, y_vals, linestyle, color=color, linewidth=linewidth, alpha=0.8)
 
-    # 设置坐标范围
+    # SetCoordinateRange
     if x_range and y_range:
         ax.set_xlim(x_range)
         ax.set_ylim(y_range)
@@ -122,17 +122,17 @@ def draw_objects(ax, objects, map_api: Optional[MapAPI], show_id: bool = True,
                  title: str = "", x_range: tuple = None, y_range: tuple = None,
                  prev_frame_objects: Optional[List[Dict]] = None):
     """
-    在轴上绘制目标和地图
+    underaxisGoalandMap
 
     Args:
-        ax: matplotlib 轴
-        objects: 目标列表，每个包含 location, size, heading, type, id 等
-        map_api: 地图 API
-        show_id: 是否显示 ID
-        title: 子图标题
-        x_range: X 轴范围
-        y_range: Y 轴范围
-        prev_frame_objects: 前一帧的目标列表（用于计算运动方向）
+        ax: matplotlib axis
+        objects: Goallist，include location, size, heading, type, id etc.
+        map_api: Map API
+        show_id: iswhetherShow ID
+        title: Graph
+        x_range: X axisRange
+        y_range: Y axisRange
+        prev_frame_objects: beforeaGoallist（computingDirection）
     """
     ax.clear()
     ax.set_title(title, fontsize=12, fontweight='bold')
@@ -140,18 +140,18 @@ def draw_objects(ax, objects, map_api: Optional[MapAPI], show_id: bool = True,
     ax.set_ylabel('Y (m)')
     ax.grid(True, alpha=0.3)
 
-    # 先绘制地图
+    # Map
     draw_map(ax, map_api, x_range, y_range)
 
     if not objects:
         ax.text(0, 0, 'No objects', ha='center', va='center', fontsize=14)
         return
 
-    # 收集所有位置用于设置坐标范围
+    # havelocationSetCoordinateRange
     all_x = []
     all_y = []
 
-    # 构建前一帧位置字典（用于计算运动方向）
+    # beforealocationDictionary（computingDirection）
     prev_positions = {}
     if prev_frame_objects:
         for obj in prev_frame_objects:
@@ -170,7 +170,7 @@ def draw_objects(ax, objects, map_api: Optional[MapAPI], show_id: bool = True,
         all_x.append(x)
         all_y.append(y)
 
-        # 获取车辆尺寸
+        # Getvehicle
         size = obj.get('size')
         if size is None:
             size = get_vehicle_size(obj.get('type', 'Unknown'))
@@ -179,12 +179,12 @@ def draw_objects(ax, objects, map_api: Optional[MapAPI], show_id: bool = True,
         color = get_vehicle_color(obj_type)
         oid = obj.get('id')
 
-        # 使用速度方向计算 heading
-        # 检测数据中的 heading 可能不可靠，使用 velocity 计算运动方向
+        # UseVelocityDirectioncomputing heading
+        # Detectiondatain heading cannotcan，Use velocity computingDirection
         vx, vy = 0, 0
         vel = obj.get('velocity')
         if vel:
-            # 支持字典和列表两种格式
+            # SupportedDictionaryandlistTwotype
             if isinstance(vel, dict):
                 vx = vel.get('vx', 0)
                 vy = vel.get('vy', 0)
@@ -194,13 +194,13 @@ def draw_objects(ax, objects, map_api: Optional[MapAPI], show_id: bool = True,
         if abs(vx) > 0.1 or abs(vy) > 0.1:
             heading = np.arctan2(vy, vx)
         else:
-            # 没有速度信息时使用 heading
+            # haveVelocityinfoUse heading
             heading = obj.get('heading', 0.0)
 
-        # 绘制矩形表示车辆
+        # representationsvehicle
         length, width = size[0], size[1]
 
-        # 创建矩形，旋转中心在矩形中心
+        # Create，RotationCenterunderCenter
         rect = Rectangle(
             (x - length/2, y - width/2),
             length, width,
@@ -211,21 +211,21 @@ def draw_objects(ax, objects, map_api: Optional[MapAPI], show_id: bool = True,
         )
         ax.add_patch(rect)
 
-        # 绘制中心点
+        # CenterPoint
         ax.plot(x, y, 'o', color=color, markersize=6)
 
-        # 绘制航向线（使用长度方向的 1.5 倍）
+        # Heading（UselengthDirection 1.5 ）
         end_x = x + np.cos(heading) * length * 1.5
         end_y = y + np.sin(heading) * length * 1.5
         ax.plot([x, end_x], [y, end_y], '-', color=color, linewidth=2)
 
-        # 显示 ID
+        # Show ID
         if show_id and oid is not None:
             ax.text(x, y + 1, f"#{oid}",
                    ha='center', va='bottom', fontsize=9,
                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
 
-    # 设置坐标范围
+    # SetCoordinateRange
     if all_x and all_y and not x_range:
         margin = 10
         x_min, x_max = min(all_x) - margin, max(all_x) + margin
@@ -236,7 +236,7 @@ def draw_objects(ax, objects, map_api: Optional[MapAPI], show_id: bool = True,
 
 def run_tracker_on_all_frames(detection_dir: str, max_distance: float = 5.0):
     """
-    运行跟踪器并返回所有帧的跟踪结果
+    RunTrackingerandReturnhaveTrackingResult
 
     Returns:
         Dict[frame_id, List[tracked_objects]]
@@ -274,10 +274,10 @@ def run_tracker_on_all_frames(detection_dir: str, max_distance: float = 5.0):
                     'speed': d.get('speed', 0.0),
                 })
 
-        # 更新跟踪器
+        # UpdateTrackinger
         tracks = tracker.update(detections, frame_id)
 
-        # 保存当前帧的跟踪结果
+        # SaveCurrentTrackingResult
         frame_tracks = []
         for track_id, track_obj in tracks.items():
             if track_obj.last_position is not None:
@@ -299,32 +299,32 @@ def visualize_frame(frame_id: int, det_objects: List[Dict], track_objects: List[
                    map_api: Optional[MapAPI], output_dir: Path,
                    x_range: tuple = None, y_range: tuple = None):
     """
-    可视化单帧的两个子图（检测 + 地图，跟踪 + 地图）
+    cansingleTwoGraph（Detection + Map，Tracking + Map）
 
     Args:
-        frame_id: 帧 ID
-        det_objects: 检测结果列表
-        track_objects: 跟踪结果列表
-        map_api: 地图 API
-        output_dir: 输出目录
-        x_range: X 轴范围
-        y_range: Y 轴范围
+        frame_id:  ID
+        det_objects: DetectionResultlist
+        track_objects: TrackingResultlist
+        map_api: Map API
+        output_dir: OutputDirectory
+        x_range: X axisRange
+        y_range: Y axisRange
     """
     fig, axes = plt.subplots(1, 2, figsize=(16, 7))
 
-    # 1. 检测结果 + 地图
+    # 1. DetectionResult + Map
     draw_objects(axes[0], det_objects, map_api, show_id=False,
                  title=f'Frame {frame_id} - Detections',
                  x_range=x_range, y_range=y_range)
 
-    # 2. 跟踪结果 + 地图
+    # 2. TrackingResult + Map
     draw_objects(axes[1], track_objects, map_api, show_id=True,
                  title=f'Frame {frame_id} - Tracking',
                  x_range=x_range, y_range=y_range)
 
     plt.tight_layout()
 
-    # 保存
+    # Save
     output_path = output_dir / f'frame_{frame_id:05d}.png'
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
@@ -338,15 +338,15 @@ def create_frame_range_visualization(all_frames: List, all_tracks: Dict,
                                      start_frame: int = 0,
                                      end_frame: Optional[int] = None):
     """
-    创建帧范围可视化
+    CreateRangecan
 
     Args:
-        all_frames: 所有帧数据（包含 GT 和检测）
-        all_tracks: 跟踪结果字典
-        map_api: 地图 API
-        output_dir: 输出目录
-        start_frame: 起始帧
-        end_frame: 结束帧
+        all_frames: havedata（include GT andDetection）
+        all_tracks: TrackingResultDictionary
+        map_api: Map API
+        output_dir: OutputDirectory
+        start_frame: 
+        end_frame: 
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -358,7 +358,7 @@ def create_frame_range_visualization(all_frames: List, all_tracks: Dict,
     for i, frame in enumerate(all_frames[start_frame:end_frame]):
         frame_id = frame.frame_id
 
-        # 准备检测数据
+        # directrixDetectiondata
         det_objects = []
         for obj in frame.objects:
             d = obj.to_dict()
@@ -370,10 +370,10 @@ def create_frame_range_visualization(all_frames: List, all_tracks: Dict,
                 'velocity': d.get('velocity', [0, 0, 0]),
             })
 
-        # 获取跟踪结果
+        # GetTrackingResult
         track_objects = all_tracks.get(frame_id, [])
 
-        # 可视化
+        # can
         output_path = visualize_frame(
             frame_id, det_objects, track_objects, map_api, output_dir
         )
@@ -385,7 +385,7 @@ def create_frame_range_visualization(all_frames: List, all_tracks: Dict,
 
 
 def main():
-    """主函数"""
+    """function"""
     import argparse
 
     parser = argparse.ArgumentParser(description='Per-frame visualization with map')
@@ -408,7 +408,7 @@ def main():
     print("Per-Frame Visualization (2 subplots: Detections+Map / Tracking+Map)")
     print("=" * 70)
 
-    # 加载地图
+    # LoadMap
     print(f"\nLoading map from {args.map_file}...")
     try:
         map_api = MapAPI(map_file=args.map_file)
@@ -417,13 +417,13 @@ def main():
         print(f"  Warning: Map file not found, proceeding without map")
         map_api = None
 
-    # 加载数据并运行跟踪器
+    # LoaddataandRunTrackinger
     print(f"\nLoading data from {args.data_dir}...")
     all_tracks, all_frames = run_tracker_on_all_frames(args.data_dir, args.max_distance)
     print(f"  Loaded {len(all_frames)} frames")
     print(f"  Tracking complete: {len(all_tracks)} frames with tracks")
 
-    # 创建可视化
+    # Createcan
     output_dir = Path(args.output_dir)
     end_frame = min(args.start_frame + args.num_frames, len(all_frames))
 

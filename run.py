@@ -27,22 +27,6 @@ sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "src"))
 
 
-def check_conda_env():
-    """检查是否在正确的 conda 环境中"""
-    env_name = os.environ.get("CONDA_DEFAULT_ENV")
-    conda_prefix = os.environ.get("CONDA_PREFIX")
-
-    # 检查环境名称
-    if env_name and "mapagent" in env_name.lower():
-        return True
-
-    # 检查路径
-    if conda_prefix and "mapagent" in conda_prefix.lower():
-        return True
-
-    return False
-
-
 def check_map_file(map_path: str) -> bool:
     """检查地图文件是否存在"""
     path = Path(map_path)
@@ -150,23 +134,6 @@ def main():
     )
 
     args = parser.parse_args()
-
-    # 检查 conda 环境
-    if not check_conda_env():
-        print("\n" + "=" * 50)
-        print("  警告：未检测到 mapagent conda 环境")
-        print("=" * 50)
-        print("\n请先激活 conda 环境:")
-        print("  conda activate mapagent")
-        print("\n或直接使用环境中的 Python:")
-        print("  D:\\program\\conda_envs\\mapagnet\\python.exe run.py", args.mode)
-        print("=" * 50)
-
-        # 尝试继续使用当前 Python 的路径
-        if "mapagent" in sys.executable.lower():
-            print("\n检测到可执行文件路径包含 mapagent，继续执行...\n")
-        else:
-            print("\n将继续使用当前 Python 环境\n")
 
     if args.mode == "chat":
         run_chat_mode(args)

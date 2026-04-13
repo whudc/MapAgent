@@ -805,12 +805,16 @@ input[type="range"]::-webkit-slider-thumb:hover {
     z-index: 1;
 }
 
-#trajectory-canvas {
+#pointcloud-canvas {
     z-index: 2;
 }
 
-#vehicle-canvas {
+#trajectory-canvas {
     z-index: 3;
+}
+
+#vehicle-canvas {
+    z-index: 4;
 }
 
 /* ===== 加载指示器 ===== */

@@ -576,6 +576,112 @@ class TrajectoryRenderer {
     }
 }
 
+// ===== 点云渲染器 =====
+class PointCloudRenderer {
+    constructor(canvas) {
+        this.canvas = canvas;
+        this.ctx = canvas.getContext('2d');
+        this.view = new ViewState();
+        this.points = [];
+        this.visible = false;
+        this.useSemanticColor = true;
+        this.density = 100;
+        this.pointSize = 1.5;
+        // 性能优化：按颜色分组
+        this.colorGroups = new Map();
+        this.dirty = true;
+    }
+
+    resize(width, height) {
+        this.canvas.width = width;
+        this.canvas.height = height;
+        this.view.setCanvasSize(width, height);
+        this.dirty = true;
+    }
+
+    setPoints(points) {
+        this.points = points || [];
+        this.dirty = true;
+        // 预计算颜色分组
+        this._groupPointsByColor();
+    }
+
+    setVisible(visible) {
+        this.visible = visible;
+    }
+
+    setPointSize(size) {
+        this.pointSize = size;
+    }
+
+    setDensity(density) {
+        this.density = density;
+    }
+
+    _groupPointsByColor() {
+        // 按颜色分组以批量绘制
+        this.colorGroups.clear();
+        const step = Math.max(1, Math.floor(100 / this.density));
+
+        for (let i = 0; i < this.points.length; i += step) {
+            const point = this.points[i];
+            let color = '#808080';
+
+            if (this.useSemanticColor && point.color) {
+                const [r, g, b] = point.color;
+                color = `rgb(${r},${g},${b})`;
+            } else if (point.z) {
+                const hue = Math.max(0, Math.min(240, 240 - point.z * 10));
+                color = `hsl(${hue}, 70%, 50%)`;
+            }
+
+            if (!this.colorGroups.has(color)) {
+                this.colorGroups.set(color, []);
+            }
+            this.colorGroups.get(color).push(point);
+        }
+        this.dirty = false;
+    }
+
+    render() {
+        if (!this.visible || this.points.length === 0) {
+            this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            return;
+        }
+
+        // 如果数据变了，重新分组
+        if (this.dirty) {
+            this._groupPointsByColor();
+        }
+
+        const { ctx, view } = this;
+        ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+
+        const size = this.pointSize;
+
+        // 按颜色批量绘制
+        for (const [color, points] of this.colorGroups) {
+            ctx.fillStyle = color;
+            ctx.beginPath();
+
+            for (const point of points) {
+                const pos = view.transformPoint(point.x, point.y);
+
+                // 检查点是否在屏幕内
+                if (pos.x < -size || pos.x > view.width + size ||
+                    pos.y < -size || pos.y > view.height + size) {
+                    continue;
+                }
+
+                // 使用矩形代替圆形，性能更好
+                ctx.rect(pos.x - size / 2, pos.y - size / 2, size, size);
+            }
+
+            ctx.fill();
+        }
+    }
+}
+
 // ===== 车辆渲染器 =====
 class VehicleRenderer {
     constructor(canvas) {
@@ -583,12 +689,15 @@ class VehicleRenderer {
         this.ctx = canvas.getContext('2d');
         this.view = new ViewState();
         this.vehicles = [];
+        this.trajectories = [];  // 轨迹数据用于计算运动方向
         this.hoveredVehicle = null;
         this.onVehicleHover = null;
         // 车辆尺寸基于实际大小，考虑缩放
         this.baseVehicleScale = 0.8; // 缩小车辆显示比例
         // 启用的目标类型
         this.enabledObjectTypes = new Set(['Car', 'Suv', 'Truck', 'Bus', 'Non_motor_rider', 'Pedestrian', 'Unknown']);
+        // 调试模式：显示运动方向与朝向对比
+        this.debugMode = true;
     }
 
     resize(width, height) {
@@ -599,6 +708,62 @@ class VehicleRenderer {
 
     setVehicles(vehicles) {
         this.vehicles = vehicles;
+    }
+
+    setTrajectories(trajectories) {
+        this.trajectories = trajectories;
+    }
+
+    /**
+     * 根据轨迹数据计算车辆的运动方向
+     * @param {number} vehicleId - 车辆 ID
+     * @param {number} currentFrameId - 当前帧 ID
+     * @returns {number|null} - 运动方向角度（度），找不到轨迹时返回 null
+     */
+    getMotionDirection(vehicleId, currentFrameId) {
+        // 查找车辆的轨迹
+        const traj = this.trajectories.find(t => t.vehicle_id === vehicleId);
+        if (!traj || !traj.states || traj.states.length < 2) {
+            return null;
+        }
+
+        // 找到当前帧和前一帧的状态
+        const states = traj.states;
+        let currentIndex = -1;
+        for (let i = 0; i < states.length; i++) {
+            if (states[i].frame_id === currentFrameId) {
+                currentIndex = i;
+                break;
+            }
+        }
+
+        // 需要至少两个连续的帧
+        if (currentIndex < 0 || currentIndex === 0) {
+            return null;
+        }
+
+        const currentState = states[currentIndex];
+        const prevState = states[currentIndex - 1];
+
+        const currPos = currentState.position;
+        const prevPos = prevState.position;
+
+        // 计算位移向量
+        const dx = currPos[0] - prevPos[0];
+        const dy = currPos[1] - prevPos[1];
+
+        // 如果位移太小，认为静止
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 0.1) {
+            return null;
+        }
+
+        // 计算运动方向（弧度转角度）
+        // Math.atan2 返回 -PI 到 PI，0 度指向正东（X 轴正方向）
+        const motionRad = Math.atan2(dy, dx);
+        const motionDeg = motionRad * 180 / Math.PI;
+
+        return motionDeg;
     }
 
     setEnabledObjectTypes(types) {
@@ -630,8 +795,22 @@ class VehicleRenderer {
             const screenScale = this.baseVehicleScale * vehicleConfig.scale;
             const size = Math.max(3, baseSize * screenScale * view.zoom * 0.3);
 
-            // 绘制车辆（椭圆形，带方向）
-            this.drawVehicle(ctx, pos.x, pos.y, size, color, vehicle.heading || 0, isHovered);
+            // 使用后端返回的 heading（已经过 LLM 优化，基于前后帧位置差的运动方向）
+            const heading = vehicle.heading !== undefined ? vehicle.heading : 0;
+
+            // 尝试从轨迹数据计算运动方向，用于判断是否运动
+            const motionAngleFromTraj = this.getMotionDirection(vehicle.vehicle_id, vehicle.frame_id);
+
+            // 判断是否运动：位移距离 >= 0.1 米
+            const isMoving = motionAngleFromTraj !== null;
+
+            if (isMoving) {
+                // 运动物体，绘制箭头指示运动方向
+                this.drawVehicleWithArrow(ctx, pos.x, pos.y, size, color, heading, isHovered, true);
+            } else {
+                // 静止物体，只绘制矩形框
+                this.drawVehicleWithArrow(ctx, pos.x, pos.y, size, color, heading, isHovered, false);
+            }
 
             // 绘制 ID
             if (showIds) {
@@ -647,32 +826,57 @@ class VehicleRenderer {
         });
     }
 
-    drawVehicle(ctx, x, y, size, color, heading, isHovered) {
+    drawVehicleWithArrow(ctx, x, y, size, color, heading, isHovered, showArrow) {
         ctx.save();
 
         // 旋转到车辆朝向
+        // heading 的 0 度指向正东（X 轴正方向），与 Math.atan2 一致
         ctx.translate(x, y);
-        ctx.rotate(-heading * Math.PI / 180);
+        ctx.rotate(heading * Math.PI / 180);
 
-        // 绘制车身（椭圆）
+        // 计算矩形尺寸
+        const length = size * 2.5;  // 矩形长度
+        const width = size * 1.2;   // 矩形宽度
+
+        // 绘制矩形内部填充（半透明）
+        ctx.fillStyle = color + '40';  // 添加透明度
+        ctx.fillRect(-length / 2, -width / 2, length, width);
+
+        // 绘制矩形边框
         ctx.beginPath();
-        ctx.fillStyle = color;
-        ctx.ellipse(0, 0, size * 1.5, size, 0, 0, Math.PI * 2);
-        ctx.fill();
-
-        // 绘制边框
-        ctx.strokeStyle = 'white';
-        ctx.lineWidth = isHovered ? 2 : 1;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = isHovered ? 3 : 2;
+        ctx.rect(-length / 2, -width / 2, length, width);
         ctx.stroke();
 
-        // 绘制车头指示
-        ctx.beginPath();
-        ctx.fillStyle = 'rgba(255,255,255,0.5)';
-        ctx.moveTo(size * 0.5, 0);
-        ctx.lineTo(-size * 0.3, -size * 0.5);
-        ctx.lineTo(-size * 0.3, size * 0.5);
-        ctx.closePath();
-        ctx.fill();
+        // 只有运动物体才绘制箭头（箭头在矩形框前方）
+        if (showArrow) {
+            const arrowGap = size * 0.5;      // 箭头与矩形框的间距
+            const arrowLength = size * 1.2;    // 箭头杆长度
+            const arrowHeadLength = size * 0.8; // 箭头头部长度
+            const arrowHeadWidth = width * 1.2; // 箭头头部宽度
+
+            // 箭头起点（矩形框前端外部）
+            const arrowStart = length / 2 + arrowGap;
+            const arrowEnd = arrowStart + arrowLength;
+
+            // 箭头主体（从矩形框前端向外延伸）
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.lineWidth = 2;
+            ctx.moveTo(arrowStart, 0);
+            ctx.lineTo(arrowEnd - arrowHeadLength, 0);
+            ctx.stroke();
+
+            // 箭头头部
+            ctx.beginPath();
+            ctx.fillStyle = 'rgba(255, 255, 255, 1.0)';
+            ctx.moveTo(arrowEnd, 0);
+            ctx.lineTo(arrowEnd - arrowHeadLength, -arrowHeadWidth / 2);
+            ctx.lineTo(arrowEnd - arrowHeadLength, arrowHeadWidth / 2);
+            ctx.closePath();
+            ctx.fill();
+        }
 
         ctx.restore();
     }
@@ -705,11 +909,13 @@ class TrafficFlowVisualizer {
         this.mapCanvas = document.getElementById('map-canvas');
         this.trajCanvas = document.getElementById('trajectory-canvas');
         this.vehicleCanvas = document.getElementById('vehicle-canvas');
+        this.pointCloudCanvas = document.getElementById('pointcloud-canvas');
 
         // 初始化渲染器
         this.mapRenderer = new MapRenderer(this.mapCanvas);
         this.trajRenderer = new TrajectoryRenderer(this.trajCanvas);
         this.vehicleRenderer = new VehicleRenderer(this.vehicleCanvas);
+        this.pointCloudRenderer = new PointCloudRenderer(this.pointCloudCanvas);
 
         // 状态
         this.frames = [];
@@ -728,7 +934,13 @@ class TrafficFlowVisualizer {
             showVehicles: true,
             showIds: true,
             showTrajectories: false,
-            showTrail: true
+            showTrail: true,
+            showPointCloud: false,
+            useSemanticColor: true,
+            usePerception: true,
+            useVoxelGrid: true,  // 使用网格下采样
+            pointDensity: 30,
+            pointSize: 1.5
         };
 
         // 绑定事件
@@ -746,6 +958,7 @@ class TrafficFlowVisualizer {
         this.mapRenderer.resize(width, height);
         this.trajRenderer.resize(width, height);
         this.vehicleRenderer.resize(width, height);
+        this.pointCloudRenderer.resize(width, height);
 
         // 同步视图
         const mainView = this.mapRenderer.view;
@@ -761,6 +974,16 @@ class TrafficFlowVisualizer {
 
         this.vehicleRenderer.view = new ViewState();
         Object.assign(this.vehicleRenderer.view, {
+            width, height,
+            centerX: mainView.centerX,
+            centerY: mainView.centerY,
+            zoom: mainView.zoom,
+            panX: mainView.panX,
+            panY: mainView.panY
+        });
+
+        this.pointCloudRenderer.view = new ViewState();
+        Object.assign(this.pointCloudRenderer.view, {
             width, height,
             centerX: mainView.centerX,
             centerY: mainView.centerY,
@@ -812,9 +1035,9 @@ class TrafficFlowVisualizer {
             // 只拖动地图视图，然后同步到其他视图
             this.mapRenderer.view.drag(x, y);
 
-            // 同步轨迹和车辆视图到地图视图
+            // 同步轨迹、车辆和点云视图到地图视图
             const mapView = this.mapRenderer.view;
-            [this.trajRenderer.view, this.vehicleRenderer.view].forEach(view => {
+            [this.trajRenderer.view, this.vehicleRenderer.view, this.pointCloudRenderer.view].forEach(view => {
                 view.panX = mapView.panX;
                 view.panY = mapView.panY;
                 view.rotation = mapView.rotation;
@@ -827,6 +1050,7 @@ class TrafficFlowVisualizer {
             this.mapRenderer.view.endDrag();
             this.trajRenderer.view.endDrag();
             this.vehicleRenderer.view.endDrag();
+            this.pointCloudRenderer.view.endDrag();
         });
 
         // 滚轮缩放 - 绑定到容器而不是单个 canvas，因为 canvas 有层叠
@@ -844,9 +1068,9 @@ class TrafficFlowVisualizer {
             // 在所有视图上应用缩放
             this.mapRenderer.view.zoomAt(x, y, delta);
 
-            // 同步轨迹和车辆视图到地图视图（完全同步）
+            // 同步轨迹、车辆和点云视图到地图视图（完全同步）
             const mapView = this.mapRenderer.view;
-            [this.trajRenderer.view, this.vehicleRenderer.view].forEach(view => {
+            [this.trajRenderer.view, this.vehicleRenderer.view, this.pointCloudRenderer.view].forEach(view => {
                 view.zoom = mapView.zoom;
                 view.panX = mapView.panX;
                 view.panY = mapView.panY;
@@ -911,6 +1135,13 @@ class TrafficFlowVisualizer {
             panX: mainView.panX,
             panY: mainView.panY
         });
+        Object.assign(this.pointCloudRenderer.view, {
+            centerX: mainView.centerX,
+            centerY: mainView.centerY,
+            zoom: mainView.zoom,
+            panX: mainView.panX,
+            panY: mainView.panY
+        });
 
         this.render();
     }
@@ -926,9 +1157,10 @@ class TrafficFlowVisualizer {
         document.getElementById('frame-slider').max = frames.length - 1;
         document.getElementById('current-frame-label').textContent = '0';
 
-        // 设置第一帧的车辆
+        // 设置车辆和轨迹数据到 vehicleRenderer（用于计算运动方向）
         if (frames.length > 0 && frames[0].vehicles) {
             this.vehicleRenderer.setVehicles(frames[0].vehicles);
+            this.vehicleRenderer.setTrajectories(trajectories);  // 传递轨迹数据
             document.getElementById('vehicle-count').textContent = frames[0].vehicles.length;
         }
 
@@ -947,6 +1179,17 @@ class TrafficFlowVisualizer {
         document.getElementById('vehicle-count').textContent = frame.vehicles?.length || 0;
 
         this.vehicleRenderer.setVehicles(frame.vehicles || []);
+        this.vehicleRenderer.setTrajectories(this.trajectories);  // 传递轨迹数据
+
+        // 加载对应帧的点云
+        if (this.options.showPointCloud) {
+            this.loadPointCloud(idx, {
+                usePerception: this.options.usePerception,
+                useSemantic: this.options.useSemanticColor,
+                density: this.options.pointDensity
+            });
+        }
+
         this.render();
     }
 
@@ -1001,7 +1244,7 @@ class TrafficFlowVisualizer {
         view.zoom = Math.max(0.5, Math.min(5, zoom));
 
         // 同步到其他渲染器（完全同步）
-        [this.trajRenderer.view, this.vehicleRenderer.view].forEach(v => {
+        [this.trajRenderer.view, this.vehicleRenderer.view, this.pointCloudRenderer.view].forEach(v => {
             v.zoom = view.zoom;
             v.panX = view.panX;
             v.panY = view.panY;
@@ -1022,7 +1265,7 @@ class TrafficFlowVisualizer {
         view.panY += dy;
 
         // 同步到其他渲染器（完全同步）
-        [this.trajRenderer.view, this.vehicleRenderer.view].forEach(v => {
+        [this.trajRenderer.view, this.vehicleRenderer.view, this.pointCloudRenderer.view].forEach(v => {
             v.panX = view.panX;
             v.panY = view.panY;
         });
@@ -1043,6 +1286,10 @@ class TrafficFlowVisualizer {
         this.vehicleRenderer.view.panX = view.panX;
         this.vehicleRenderer.view.panY = view.panY;
         this.vehicleRenderer.view.rotation = view.rotation;
+        this.pointCloudRenderer.view.zoom = view.zoom;
+        this.pointCloudRenderer.view.panX = view.panX;
+        this.pointCloudRenderer.view.panY = view.panY;
+        this.pointCloudRenderer.view.rotation = view.rotation;
 
         // 更新 UI
         document.getElementById('zoom-slider').value = view.zoom;
@@ -1073,6 +1320,9 @@ class TrafficFlowVisualizer {
             this.mapRenderer.ctx.clearRect(0, 0, this.mapCanvas.width, this.mapCanvas.height);
         }
 
+        // 渲染点云
+        this.pointCloudRenderer.render();
+
         if (this.options.showTrajectories || this.options.showTrail) {
             this.trajRenderer.render(this.currentFrameIdx, this.options.showTrail);
         } else {
@@ -1083,6 +1333,40 @@ class TrafficFlowVisualizer {
             this.vehicleRenderer.render(this.options.showIds);
         } else {
             this.vehicleRenderer.ctx.clearRect(0, 0, this.vehicleCanvas.width, this.vehicleCanvas.height);
+        }
+
+        // 控制点云图例显示
+        const pointcloudLegend = document.getElementById('pointcloud-legend');
+        if (pointcloudLegend) {
+            pointcloudLegend.style.display = this.options.showPointCloud ? 'block' : 'none';
+        }
+    }
+
+    async loadPointCloud(frameId, options = {}) {
+        const { usePerception = true, useSemantic = true, density = 100, useVoxelGrid = true } = options;
+
+        try {
+            const params = new URLSearchParams({
+                use_perception: usePerception,
+                use_semantic: useSemantic,
+                density: density,
+                use_voxel: useVoxelGrid
+            });
+            const response = await fetch(`/api/pointcloud/${frameId}?${params}`);
+            const data = await response.json();
+
+            if (data.success) {
+                this.pointCloudRenderer.setPoints(data.points);
+                return true;
+            } else {
+                console.warn('点云加载失败:', data.error);
+                this.pointCloudRenderer.setPoints([]);
+                return false;
+            }
+        } catch (error) {
+            console.error('点云加载错误:', error);
+            this.pointCloudRenderer.setPoints([]);
+            return false;
         }
     }
 
@@ -1417,6 +1701,68 @@ function bindControlEvents() {
 
     document.getElementById('show-trail').addEventListener('change', (e) => {
         visualizer.setOption('showTrail', e.target.checked);
+    });
+
+    // 点云控制
+    document.getElementById('show-pointcloud').addEventListener('change', (e) => {
+        visualizer.setOption('showPointCloud', e.target.checked);
+        visualizer.pointCloudRenderer.setVisible(e.target.checked);
+        // 切换显示时加载当前帧的点云
+        if (e.target.checked && visualizer.frames.length > 0) {
+            visualizer.loadPointCloud(visualizer.currentFrameIdx, {
+                usePerception: visualizer.options.usePerception,
+                useSemantic: visualizer.options.useSemanticColor,
+                density: visualizer.options.pointDensity
+            });
+        }
+        visualizer.render();
+    });
+
+    document.getElementById('use-semantic-color').addEventListener('change', (e) => {
+        visualizer.setOption('useSemanticColor', e.target.checked);
+        visualizer.pointCloudRenderer.useSemanticColor = e.target.checked;
+        if (visualizer.options.showPointCloud) {
+            visualizer.loadPointCloud(visualizer.currentFrameIdx, {
+                usePerception: visualizer.options.usePerception,
+                useSemantic: e.target.checked,
+                density: visualizer.options.pointDensity
+            });
+        }
+        visualizer.render();
+    });
+
+    document.getElementById('point-density-slider').addEventListener('input', (e) => {
+        const density = parseInt(e.target.value);
+        document.getElementById('point-density-value').textContent = density;
+        visualizer.setOption('pointDensity', density);
+        visualizer.pointCloudRenderer.setDensity(density);
+        if (visualizer.options.showPointCloud) {
+            visualizer.loadPointCloud(visualizer.currentFrameIdx, {
+                usePerception: visualizer.options.usePerception,
+                useSemantic: visualizer.options.useSemanticColor,
+                density: density
+            });
+        }
+        visualizer.render();
+    });
+
+    document.getElementById('point-size-slider').addEventListener('input', (e) => {
+        const size = parseFloat(e.target.value);
+        document.getElementById('point-size-value').textContent = size.toFixed(1);
+        visualizer.pointCloudRenderer.setPointSize(size);
+        visualizer.render();
+    });
+
+    document.getElementById('use-perception-pcd').addEventListener('change', (e) => {
+        visualizer.setOption('usePerception', e.target.checked);
+        if (visualizer.options.showPointCloud && visualizer.frames.length > 0) {
+            visualizer.loadPointCloud(visualizer.currentFrameIdx, {
+                usePerception: e.target.checked,
+                useSemantic: visualizer.options.useSemanticColor,
+                density: visualizer.options.pointDensity
+            });
+        }
+        visualizer.render();
     });
 
     // 视图控制

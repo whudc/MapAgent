@@ -23,6 +23,7 @@ from typing import Dict, List, Any, Optional, Tuple, Set
 from dataclasses import dataclass, field
 from enum import Enum
 import json
+import math
 import traceback
 from pathlib import Path
 import numpy as np
@@ -671,7 +672,8 @@ class LLMOptimizer:
 
             print(f"[DEBUG] Calling LLM for track {track_id}...")
             response = self.llm_client.chat_simple(prompt)
-            print(f"[DEBUG] LLM response received for track {track_id}: {response[:100] if response else 'EMPTY'}")
+            # 完整打印 LLM 响应（调试用）
+            print(f"[DEBUG] LLM response received for track {track_id}: {response}")
 
             result = self._parse_llm_response(response)
 
@@ -1201,6 +1203,117 @@ class TrafficFlowAgent(BaseAgent):
 3. 使用 get_trajectory_by_id 查询特定轨迹
 4. 使用 save_reconstruction_result 保存结果"""
 
+    def _optimize_headings(self, trajectories: Dict[int, Any], frame_data: List[Dict],
+                           use_llm: bool = False) -> Dict[int, Dict]:
+        """
+        优化轨迹中每一帧的朝向（heading）
+
+        基于前后帧位置差计算运动方向，作为真实的朝向参考
+        对于噪声较大的帧，可以使用 LLM 进行平滑优化
+
+        Args:
+            trajectories: 轨迹数据（按 track_id 索引）
+            frame_data: 帧数据列表
+            use_llm: 是否使用 LLM 进行平滑优化
+
+        Returns:
+            优化后的朝向数据 {track_id: {frame_id: heading}}
+        """
+        heading_optimized = {}
+
+        for track_id, traj in trajectories.items():
+            frame_ids = traj.frame_ids if hasattr(traj, 'frame_ids') else []
+            positions = traj.positions if hasattr(traj, 'positions') else []
+
+            if len(frame_ids) < 2:
+                continue
+
+            headings = {}
+            for i, frame_id in enumerate(frame_ids):
+                if i == 0 and len(frame_ids) > 1:
+                    # 第一帧：使用第一帧和第二帧的位置差计算运动方向（向前差分）
+                    curr_pos = positions[0]
+                    next_pos = positions[1]
+
+                    dx = next_pos[0] - curr_pos[0]
+                    dy = next_pos[1] - curr_pos[1]
+                    dist = math.sqrt(dx * dx + dy * dy)
+
+                    if dist < 0.1:  # 静止
+                        vel = traj.velocities[i] if i < len(traj.velocities) else [0, 0, 0]
+                        heading = math.degrees(math.atan2(vel[1], vel[0])) if vel[0] != 0 or vel[1] != 0 else 0.0
+                    else:
+                        heading = math.degrees(math.atan2(dy, dx))
+                elif i == 0:
+                    # 只有一帧的情况：使用 velocity 方向
+                    vel = traj.velocities[i] if i < len(traj.velocities) else [0, 0, 0]
+                    heading = math.degrees(math.atan2(vel[1], vel[0])) if vel[0] != 0 or vel[1] != 0 else 0.0
+                else:
+                    # 计算前后帧位置差得到运动方向（向后差分）
+                    prev_pos = positions[i - 1]
+                    curr_pos = positions[i]
+
+                    dx = curr_pos[0] - prev_pos[0]
+                    dy = curr_pos[1] - prev_pos[1]
+                    dist = math.sqrt(dx * dx + dy * dy)
+
+                    if dist < 0.1:  # 静止
+                        # 静止时使用前向速度方向或默认 heading
+                        vel = traj.velocities[i] if i < len(traj.velocities) else [0, 0, 0]
+                        heading = math.degrees(math.atan2(vel[1], vel[0])) if vel[0] != 0 or vel[1] != 0 else 0.0
+                    else:
+                        # 运动方向作为朝向
+                        heading = math.degrees(math.atan2(dy, dx))
+
+                headings[frame_id] = heading
+
+            # 如果启用 LLM，进行平滑优化
+            if use_llm and self._llm_optimizer and self._llm_optimizer.llm_client and len(headings) > 2:
+                headings = self._smooth_headings_with_llm(track_id, headings, frame_ids)
+
+            heading_optimized[track_id] = headings
+
+        return heading_optimized
+
+    def _smooth_headings_with_llm(self, track_id: int, headings: Dict[int, float],
+                                   frame_ids: List[int]) -> Dict[int, float]:
+        """
+        使用 LLM 对朝向序列进行平滑优化
+
+        LLM 分析：
+        1. 检测异常的朝向跳变（非物理运动）
+        2. 基于轨迹平滑性进行修正
+        """
+        # 构建 LLM 输入
+        heading_series = [(fid, headings.get(fid, 0)) for fid in frame_ids]
+
+        prompt = f"""
+分析车辆轨迹的朝向序列，识别异常的朝向跳变并进行平滑修正。
+
+Track ID: {track_id}
+朝向序列（frame_id: heading_degrees）:
+{json.dumps(heading_series, indent=2)}
+
+车辆运动特性：
+1. 朝向变化应该是连续的，不会出现突然的 180 度跳变
+2. 正常车辆的角速度一般不超过 30 度/帧（假设 10Hz）
+3. 如果相邻帧朝向差异 > 90 度，很可能是检测噪声
+
+请分析并返回修正后的朝向序列（JSON 格式）：
+{{
+    "anomalies": [{{"frame_id": X, "original": Y, "corrected": Z, "reason": "..."}}],
+    "smoothed_headings": {{frame_id: heading, ...}}
+}}
+"""
+
+        try:
+            response = self._llm_optimizer.llm_client.chat(prompt)
+            result = json.loads(response)
+            return result.get('smoothed_headings', headings)
+        except Exception:
+            # LLM 失败时返回原始数据
+            return headings
+
     def process(self, query: str, **kwargs) -> Dict[str, Any]:
         """
         处理查询
@@ -1245,15 +1358,44 @@ class TrafficFlowAgent(BaseAgent):
             for tid, traj in self._trajectories.items():
                 states = []
                 for i, frame_id in enumerate(traj.frame_ids):
+                    vel = traj.velocities[i] if i < len(traj.velocities) else [0, 0, 0]
+                    speed = math.sqrt(vel[0] ** 2 + vel[1] ** 2) if len(vel) >= 2 else 0.0
                     states.append({
                         'position': traj.positions[i],
                         'frame_id': frame_id,
+                        'velocity': vel,
+                        'speed': speed,
                     })
                 trajectories.append({
                     'vehicle_id': tid,
                     'vehicle_type': traj.dominant_type,
                     'states': states,
                 })
+
+            # 朝向优化：基于前后帧位置差计算运动方向
+            heading_optimized = self._optimize_headings(
+                self._trajectories,
+                frames,
+                use_llm=self._use_llm and self._llm_optimizer is not None
+            )
+
+            # 将优化后的朝向应用到帧数据和轨迹数据
+            for frame in frames:
+                frame_id = frame['frame_id']
+                for vehicle in frame.get('vehicles', []):
+                    track_id = vehicle.get('vehicle_id')
+                    if track_id in heading_optimized and frame_id in heading_optimized[track_id]:
+                        vehicle['heading'] = heading_optimized[track_id][frame_id]
+
+            for traj_data in trajectories:
+                track_id = traj_data['vehicle_id']
+                if track_id in heading_optimized:
+                    for state in traj_data.get('states', []):
+                        frame_id = state['frame_id']
+                        if frame_id in heading_optimized[track_id]:
+                            state['heading'] = heading_optimized[track_id][frame_id]
+                        else:
+                            state['heading'] = 0.0
 
             return {
                 "success": True,
@@ -1363,6 +1505,7 @@ class TrafficFlowAgent(BaseAgent):
                     'vehicle_type': obj.type,
                     'position': list(obj.location),
                     'heading': obj.heading,
+                    'velocity': list(obj.velocity) if hasattr(obj, 'velocity') else [0, 0, 0],
                     'speed': obj.speed,
                     'is_interpolated': False,
                 })
@@ -1385,6 +1528,7 @@ class TrafficFlowAgent(BaseAgent):
                         'vehicle_type': track.obj_type if track else 'Unknown',
                         'position': list(pos),
                         'heading': 0.0,
+                        'velocity': [0, 0, 0],  # 插值车辆速度为 0
                         'speed': 0.0,
                         'is_interpolated': True,
                     })

@@ -383,14 +383,15 @@ def generate_trajectory_gif(
     id_annotations = []
     
     # Build trajectory history for each frame
-    traj_history = {}  # track_id -> list of (frame_id, x, y)
+    traj_history = {}  # track_id -> list of (frame_id, x, y, heading)
     for traj in trajectories:
         track_id = traj.get('vehicle_id', -1)
         traj_history[track_id] = []
         for state in traj.get('states', []):
             fid = state.get('frame_id', 0)
             pos = state.get('position', [0, 0, 0])
-            traj_history[track_id].append((fid, pos[0], -pos[1]))
+            heading = state.get('heading', 0.0)
+            traj_history[track_id].append((fid, pos[0], -pos[1], heading))
     
     # Animation update function
     def update(frame_id):
@@ -411,48 +412,60 @@ def generate_trajectory_gif(
         
         # Draw trajectory trails (past positions)
         for track_id, history in traj_history.items():
-            past_positions = [(x, y) for fid, x, y in history if fid <= frame_id]
+            past_positions = [(x, y) for fid, x, y, heading in history if fid <= frame_id]
             if len(past_positions) > 1:
                 trail_x = [p[0] for p in past_positions[-20:]]  # Last 20 frames
                 trail_y = [p[1] for p in past_positions[-20:]]
                 ax.plot(trail_x, trail_y, alpha=0.3, linewidth=1)
         
-        # Draw current positions
-        current_x, current_y, current_colors = [], [], []
+        # Draw current positions with rectangles and heading
         current_ids = []
-        
+        current_headings = []
+
         for track_id, history in traj_history.items():
-            for fid, x, y in history:
+            for fid, x, y, heading in history:
                 if fid == frame_id:
-                    current_x.append(x)
-                    current_y.append(y)
                     current_ids.append(track_id)
+                    current_headings.append(heading)
                     # Get color based on trajectory length
                     traj_len = len(history)
                     if traj_len > 50:
-                        current_colors.append('#3B82F6')  # Blue - long track
+                        color = '#3B82F6'  # Blue - long track
                     elif traj_len > 20:
-                        current_colors.append('#10B981')  # Green - medium track
+                        color = '#10B981'  # Green - medium track
                     else:
-                        current_colors.append('#F59E0B')  # Orange - short track
+                        color = '#F59E0B'  # Orange - short track
+
+                    # Draw rectangle with heading (vehicle size: 4m x 2m)
+                    length, width = 4.0, 2.0
+                    rect = patches.Rectangle(
+                        (x - length/2, y - width/2),
+                        length, width,
+                        linewidth=1.5,
+                        edgecolor=color,
+                        facecolor=color,
+                        alpha=0.7
+                    )
+                    transform = Affine2D().rotate_around(x, y, heading) + ax.transData
+                    rect.set_transform(transform)
+                    ax.add_patch(rect)
                     break
-        
-        if current_x:
-            scatter = ax.scatter(current_x, current_y, c=current_colors, 
-                               s=100, marker='o', alpha=0.8,
-                               edgecolors='white', linewidths=1)
-            
-            # Add ID annotations
-            for x, y, track_id in zip(current_x, current_y, current_ids):
-                ax.annotate(f'ID:{track_id}', (x, y), textcoords="offset points",
-                           xytext=(5, 5), fontsize=8, color='white',
-                           bbox=dict(boxstyle='round,pad=0.2', 
-                                   facecolor='blue' if len(traj_history[track_id]) > 20 else 'orange',
-                                   alpha=0.7))
+
+        # Add ID annotations
+        for track_id, history in traj_history.items():
+            for fid, x, y, heading in history:
+                if fid == frame_id:
+                    traj_len = len(history)
+                    ax.annotate(f'ID:{track_id}', (x, y), textcoords="offset points",
+                               xytext=(5, 5), fontsize=8, color='white',
+                               bbox=dict(boxstyle='round,pad=0.2',
+                                       facecolor='blue' if traj_len > 20 else 'orange',
+                                       alpha=0.7))
+                    break
         
         # Frame info
         ax.text(0.02, 0.98, f'Frame: {frame_id}/{end_frame} | '
-                           f'Vehicles: {len(current_x)}',
+                           f'Vehicles: {len(current_ids)}',
                transform=ax.transAxes, fontsize=11, color='cyan',
                verticalalignment='top',
                bbox=dict(boxstyle='round', facecolor='#1a1a2e', alpha=0.8))
@@ -469,8 +482,8 @@ def generate_trajectory_gif(
     
     # Save as GIF
     print(f"  Saving to {output_path}...")
-    anim.save(str(output_path), writer=PillowWriter(fps=fps), 
-              facecolor='#0f0f1a', edgecolor='none')
+    # Keep reference to anim to prevent garbage collection
+    anim.save(str(output_path), writer=PillowWriter(fps=fps))
     
     plt.close(fig)
     print(f"  ✓ GIF saved: {output_path}")

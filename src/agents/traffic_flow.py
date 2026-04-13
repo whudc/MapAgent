@@ -124,6 +124,7 @@ class Trajectory:
     positions: List[List[float]] = field(default_factory=list)
     velocities: List[List[float]] = field(default_factory=list)
     frame_ids: List[int] = field(default_factory=list)
+    headings: List[float] = field(default_factory=list)  # Heading angles
     obj_types: List[str] = field(default_factory=list)
     lane_id: Optional[str] = None
     status: str = "active"  # active/lost/confirmed
@@ -1137,6 +1138,176 @@ Return JSON:
         else:
             return {"should_merge": False, "confidence": 0.7, "reasoning": "Time/distance gap too large"}
 
+    def analyze_heading_consistency(self,
+                                    track_id: int,
+                                    headings: List[float],
+                                    positions: List[List[float]],
+                                    velocities: List[List[float]],
+                                    frame_ids: List[int]) -> Dict:
+        """
+        Analyze and optimize heading consistency for a track
+
+        Args:
+            track_id: Track ID
+            headings: List of heading angles
+            positions: List of positions
+            velocities: List of velocities vectors
+            frame_ids: List of frame IDs
+
+        Returns:
+            Dictionary with corrected_headings and issues_found
+        """
+        cache_key = f"heading_opt_{track_id}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+
+        if not self.llm_client:
+            return self._rule_based_heading_optimization(headings, positions, velocities)
+
+        # Notify frontend
+        self._notify_progress("heading_analysis_start", {
+            "track_id": track_id,
+            "num_frames": len(headings)
+        })
+
+        try:
+            # Build prompt
+            prompt = f"""[Heading Consistency Analysis]
+
+Analyze heading consistency and identify frames with abnormal heading jumps.
+
+[Track {track_id} Data]
+- Number of frames: {len(headings)}
+- Frame range: {frame_ids[0]} to {frame_ids[-1]}
+
+[Headings by Frame]
+"""
+            for i, (fid, h) in enumerate(zip(frame_ids, headings)):
+                if i < len(velocities):
+                    vel = velocities[i]
+                    vel_dir = np.arctan2(vel[1], vel[0]) if len(vel) >= 2 else 0
+                    prompt += f"  Frame {fid}: heading={h:.4f}, velocity_direction={vel_dir:.4f}\n"
+
+            prompt += """
+[Analysis Criteria]
+1. Heading should be consistent with trajectory direction (velocity vector)
+2. Large heading changes (> 0.5 rad/frame) are suspicious unless at low speed
+3. Heading should be smooth for vehicles moving in straight lines
+
+Please analyze and provide:
+1. List of frames with heading jumps (frame_id and jump magnitude)
+2. Recommended corrected heading for each flagged frame
+3. Overall assessment (smooth/moderate/issues)
+
+Respond in format:
+{{"issues": [{{"frame_id": X, "jump": Y, "corrected": Z}}], "assessment": "smooth/moderate/issues"}}
+"""
+
+            response = self.llm_client.chat_simple(prompt)
+            result = self._parse_llm_heading_response(response, headings, frame_ids)
+
+            # Notify frontend
+            self._notify_progress("heading_analysis_result", {
+                "track_id": track_id,
+                "result": result
+            })
+
+        except Exception as e:
+            import traceback
+            error_detail = f"{str(e)}\n{traceback.format_exc()}"
+            log_error(f"LLM heading analysis failed: {error_detail}")
+            self._notify_progress("heading_analysis_error", {
+                "track_id": track_id,
+                "error": error_detail[:500]
+            })
+            result = self._rule_based_heading_optimization(headings, positions, velocities)
+
+        self.cache[cache_key] = result
+        return result
+
+    def _rule_based_heading_optimization(self, headings: List[float],
+                                          positions: List[List[float]],
+                                          velocities: List[List[float]]) -> Dict:
+        """Rule-based heading optimization"""
+        if len(headings) < 3:
+            return {"corrected_headings": headings, "issues_found": "too_short"}
+
+        headings = np.array(headings)
+        corrected = headings.copy()
+        issues = []
+
+        # Compute trajectory directions from positions
+        traj_directions = []
+        for i in range(len(positions)):
+            if i == 0 and len(positions) > 1:
+                dx = positions[1][0] - positions[0][0]
+                dy = positions[1][1] - positions[0][1]
+                traj_directions.append(np.arctan2(dy, dx))
+            elif i < len(positions) - 1:
+                dx_prev = positions[i][0] - positions[i-1][0]
+                dy_prev = positions[i][1] - positions[i-1][1]
+                dx_next = positions[i+1][0] - positions[i][0]
+                dy_next = positions[i+1][1] - positions[i][1]
+                dx = (dx_prev + dx_next) / 2
+                dy = (dy_prev + dy_next) / 2
+                traj_directions.append(np.arctan2(dy, dx))
+            else:
+                dx = positions[-1][0] - positions[-2][0]
+                dy = positions[-1][1] - positions[-2][1]
+                traj_directions.append(np.arctan2(dy, dx))
+
+        # Compare heading with trajectory direction
+        for i in range(len(headings)):
+            heading_diff = headings[i] - traj_directions[i]
+            heading_diff = np.arctan2(np.sin(heading_diff), np.cos(heading_diff))  # Normalize
+
+            if abs(heading_diff) > 0.5:  # Significant deviation
+                # Blend heading towards trajectory direction
+                corrected[i] = headings[i] * 0.3 + traj_directions[i] * 0.7
+                issues.append({"frame": i, "diff": abs(heading_diff)})
+
+        assessment = "smooth" if len(issues) == 0 else ("moderate" if len(issues) < 3 else "issues")
+
+        return {
+            "corrected_headings": corrected.tolist(),
+            "issues_found": assessment,
+            "issue_details": issues
+        }
+
+    def _parse_llm_heading_response(self, response: str,
+                                     headings: List[float],
+                                     frame_ids: List[int]) -> Dict:
+        """Parse LLM response for heading analysis"""
+        try:
+            # Try to extract JSON
+            import json
+            start = response.find('{')
+            end = response.rfind('}') + 1
+            if start >= 0 and end > start:
+                json_str = response[start:end]
+                data = json.loads(json_str)
+
+                corrected = headings.copy()
+                if 'issues' in data:
+                    for issue in data['issues']:
+                        fid = issue.get('frame_id')
+                        corrected_val = issue.get('corrected')
+                        if fid is not None and corrected_val is not None:
+                            idx = frame_ids.index(fid) if fid in frame_ids else -1
+                            if idx >= 0:
+                                corrected[idx] = corrected_val
+
+                return {
+                    "corrected_headings": corrected,
+                    "issues_found": data.get('assessment', 'unknown'),
+                    "llm_response": response[:200]
+                }
+        except Exception as e:
+            log_error(f"Failed to parse LLM heading response: {e}")
+
+        # Fallback to rule-based
+        return {"corrected_headings": headings, "issues_found": "parse_error"}
+
 
 # ==================== Main Agent ====================
 
@@ -1420,12 +1591,14 @@ Track ID: {track_id}
                 for i, frame_id in enumerate(traj.frame_ids):
                     vel = traj.velocities[i] if i < len(traj.velocities) else [0, 0, 0]
                     speed = math.sqrt(vel[0] ** 2 + vel[1] ** 2) if len(vel) >= 2 else 0.0
-                    states.append({
+                    state = {
                         'position': traj.positions[i],
                         'frame_id': frame_id,
                         'velocity': vel,
                         'speed': speed,
-                    })
+                        'heading': traj.headings[i] if i < len(traj.headings) else 0.0,
+                    }
+                    states.append(state)
                 trajectories.append({
                     'vehicle_id': tid,
                     'vehicle_type': traj.dominant_type,
@@ -1583,11 +1756,15 @@ Track ID: {track_id}
                 if not has_vehicle and is_interp:
                     # Add interpolated vehicle
                     track = self._tracker.tracks.get(track_id)
+                    # Get heading from track history
+                    heading = 0.0
+                    if track and track.headings:
+                        heading = track.headings[-1] if track.headings else 0.0
                     vehicles.append({
                         'vehicle_id': track_id,
                         'vehicle_type': track.obj_type if track else 'Unknown',
                         'position': list(pos),
-                        'heading': 0.0,
+                        'heading': heading,
                         'velocity': [0, 0, 0],  # 插值车辆速度为 0
                         'speed': 0.0,
                         'is_interpolated': True,
@@ -1652,8 +1829,8 @@ Track ID: {track_id}
             max_distance=max_distance,
             max_velocity=max_velocity,
             frame_interval=0.1,
-            min_hits=2,
-            max_misses=30,
+            min_hits=1,      # 立即确认轨迹，快速建立初始目标
+            max_misses=10,   # 10 帧未匹配即删除，避免幽灵轨迹累积
             use_map=use_lane_constraint,
             lane_weight=0.3,
             max_lane_distance=3.0,
@@ -2197,6 +2374,7 @@ Return JSON:
         1. ID jump detection - Identify and fix ID discontinuity (new)
         2. Track segment merging - Identify multiple segments of same vehicle
         3. Anomalous track marking - Mark suspicious tracks (e.g., teleport, speed anomaly)
+        4. Heading smoothing - Optimize heading angles based on trajectory (new)
         """
         log_info(f"\n[LLM Batch Analysis] Starting analysis of {len(self._tracker.tracks)} tracks...")
 
@@ -2207,10 +2385,14 @@ Return JSON:
         log_info("[ID Jump Detection] Detecting and merging ID jump trajectories...")
         self._detect_and_merge_id_jumping_trajectories(tracks, frames)
 
-        # 2. Global lane count analysis
+        # 2. [New] Heading optimization based on trajectories
+        log_info("[Heading Optimization] Optimizing heading angles based on trajectories...")
+        self._optimize_headings_from_trajectories(tracks, frames)
+
+        # 3. Global lane count analysis
         self._llm_analyze_lane_count_conservation(frames)
 
-        # 3. Analyze each track
+        # 4. Analyze each track
         for track_id, track in tracks.items():
             if track.state == TrackState.DELETED:
                 continue
@@ -2223,7 +2405,7 @@ Return JSON:
             if result:
                 analysis_results.append(result)
 
-        # 4. Apply trajectory optimization based on analysis results
+        # 5. Apply trajectory optimization based on analysis results
         self._apply_llm_analysis_results(analysis_results)
 
         log_info(f"[LLM Batch Analysis] Completed, analyzed {len(analysis_results)} tracks, LLM calls {self._stats.get('llm_calls', 0)}")
@@ -2341,6 +2523,118 @@ Return JSON:
             'track2_start_pos': start_pos_2.tolist(),
             'predicted_pos': predicted_pos.tolist()
         }
+
+    def _optimize_headings_from_trajectories(self, tracks: Dict, frames: List[FrameDetection]):
+        """
+        Optimize heading angles based on complete trajectories
+
+        Core idea:
+        1. For tracks longer than threshold (e.g., 5 frames), use LLM to analyze heading consistency
+        2. LLM identifies frames with heading jumps and recommends smoothed values
+        3. Apply heading corrections to track data
+
+        Optimization strategy:
+        - For short tracks (< 5 frames): Use trajectory direction as heading
+        - For medium tracks (5-10 frames): Apply rule-based smoothing
+        - For long tracks (> 10 frames): Use LLM to identify and fix heading jumps
+        """
+        if not self._use_llm or not self._llm_optimizer:
+            return
+
+        optimized_count = 0
+        llm_calls = 0
+
+        for track_id, track in tracks.items():
+            if track.state == TrackState.DELETED:
+                continue
+            if len(track.frame_ids) < 3:
+                continue  # Too short for meaningful optimization
+
+            # Check if heading data exists
+            if not hasattr(track, 'headings') or not track.headings:
+                continue
+
+            # For short tracks, use trajectory direction
+            if len(track.headings) < 5:
+                self._apply_trajectory_based_heading(track)
+                optimized_count += 1
+                continue
+
+            # For medium tracks, apply rule-based smoothing
+            if len(track.headings) < 10:
+                self._apply_rule_based_heading_smoothing(track)
+                optimized_count += 1
+                continue
+
+            # For long tracks, use LLM analysis
+            llm_result = self._llm_optimizer.analyze_heading_consistency(
+                track_id=track_id,
+                headings=track.headings.copy(),
+                positions=track.positions.copy(),
+                velocities=track.velocities.copy(),
+                frame_ids=track.frame_ids.copy()
+            )
+            llm_calls += 1
+            self._stats['llm_calls'] += 1
+
+            # Apply LLM-recommended corrections
+            if llm_result.get('corrected_headings'):
+                track.headings = llm_result['corrected_headings']
+                optimized_count += 1
+                log_info(f"[Heading Opt] Track {track_id}: {llm_result.get('issues_found', 'smooth')}")
+
+        log_info(f"[Heading Opt] Optimized {optimized_count} tracks, LLM calls: {llm_calls}")
+
+    def _apply_trajectory_based_heading(self, track: TrackedObject):
+        """Use trajectory direction as heading for short tracks"""
+        if len(track.positions) < 2:
+            return
+
+        for i in range(len(track.headings)):
+            if i == 0 and len(track.positions) > 1:
+                # First frame: use direction to next frame
+                dx = track.positions[1][0] - track.positions[0][0]
+                dy = track.positions[1][1] - track.positions[0][1]
+                track.headings[i] = np.arctan2(dy, dx)
+            elif i > 0 and i < len(track.positions) - 1:
+                # Middle frames: use average of previous and next direction
+                dx_prev = track.positions[i][0] - track.positions[i-1][0]
+                dy_prev = track.positions[i][1] - track.positions[i-1][1]
+                dx_next = track.positions[i+1][0] - track.positions[i][0]
+                dy_next = track.positions[i+1][1] - track.positions[i][1]
+                dx = (dx_prev + dx_next) / 2
+                dy = (dy_prev + dy_next) / 2
+                track.headings[i] = np.arctan2(dy, dx)
+            elif len(track.positions) > 1:
+                # Last frame: use direction from previous frame
+                dx = track.positions[-1][0] - track.positions[-2][0]
+                dy = track.positions[-1][1] - track.positions[-2][1]
+                track.headings[i] = np.arctan2(dy, dx)
+
+    def _apply_rule_based_heading_smoothing(self, track: TrackedObject, window_size: int = 3):
+        """
+        Apply rule-based heading smoothing using moving average
+
+        Detects heading jumps (> 0.5 rad) and applies localized smoothing
+        """
+        if len(track.headings) < window_size:
+            return
+
+        headings = np.array(track.headings)
+        corrected = headings.copy()
+
+        # Detect large heading changes
+        for i in range(1, len(headings)):
+            diff = headings[i] - headings[i-1]
+            # Normalize to [-pi, pi]
+            diff = np.arctan2(np.sin(diff), np.cos(diff))
+            if abs(diff) > 0.5:  # Large jump detected
+                # Smooth this frame with neighbors
+                start = max(0, i - 1)
+                end = min(len(headings), i + 2)
+                corrected[start:end] = np.mean(headings[start:end])
+
+        track.headings = corrected.tolist()
 
     def _llm_analyze_lane_count_conservation(self, frames: List[FrameDetection]):
         """Batch analyze lane count conservation for each lane"""
@@ -2567,6 +2861,7 @@ Return JSON:
                 positions=tracked_obj.positions.copy(),
                 velocities=tracked_obj.velocities.copy(),
                 frame_ids=tracked_obj.frame_ids.copy(),
+                headings=tracked_obj.headings.copy(),
                 obj_types=[tracked_obj.obj_type] * len(tracked_obj.frame_ids),
             )
             raw_trajectories[track_id] = trajectory

@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Traffic Flow Comparison - Frames 0-20</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0f0f1a;
+            color: #e2e8f0;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            padding: 20px;
+            border-bottom: 2px solid #3b82f6;
+        }
+        .nav {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            padding: 20px;
+            background: #1a1a2e;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .nav button {
+            padding: 10px 20px;
+            background: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .nav button:hover {
+            background: #2563eb;
+        }
+        .frame-info {
+            text-align: center;
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+        .image-container {
+            display: flex;
+            justify-content: center;
+            background: #1a1a2e;
+            border-radius: 8px;
+            padding: 10px;
+        }
+        .image-container img {
+            max-width: 100%;
+            border-radius: 8px;
+        }
+        .frame-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+            padding: 20px;
+        }
+        .frame-thumb {
+            width: 120px;
+            cursor: pointer;
+            border: 2px solid transparent;
+            border-radius: 4px;
+            transition: border-color 0.3s;
+        }
+        .frame-thumb:hover {
+            border-color: #3b82f6;
+        }
+        .frame-thumb.active {
+            border-color: #3b82f6;
+        }
+    </style>
+</head>
+<body>
+    <h1>🚗 Traffic Flow Comparison Visualization</h1>
+
+    <div class="nav">
+        <button onclick="prevFrame()">◀ Prev</button>
+        <button onclick="nextFrame()">Next ▶</button>
+        <button onclick="playAnimation()">▶ Play</button>
+        <button onclick="pauseAnimation()">⏸ Pause</button>
+        <span style="margin-left: 20px;">Frame: <span id="currentFrame">0</span> / 20</span>
+    </div>
+
+    <div class="frame-info" id="frameInfo">Frame 000000</div>
+
+    <div class="image-container">
+        <img id="frameImage" src="frames/frame_000000.png" alt="Frame 0">
+    </div>
+
+    <div class="frame-list" id="frameList">
+        <img class="frame-thumb" data-frame="0"
+             src="frames/frame_000000.png"
+             onclick="showFrame(0)"
+             alt="Frame 0">
+        <img class="frame-thumb" data-frame="1"
+             src="frames/frame_000001.png"
+             onclick="showFrame(1)"
+             alt="Frame 1">
+        <img class="frame-thumb" data-frame="2"
+             src="frames/frame_000002.png"
+             onclick="showFrame(2)"
+             alt="Frame 2">
+        <img class="frame-thumb" data-frame="3"
+             src="frames/frame_000003.png"
+             onclick="showFrame(3)"
+             alt="Frame 3">
+        <img class="frame-thumb" data-frame="4"
+             src="frames/frame_000004.png"
+             onclick="showFrame(4)"
+             alt="Frame 4">
+        <img class="frame-thumb" data-frame="5"
+             src="frames/frame_000005.png"
+             onclick="showFrame(5)"
+             alt="Frame 5">
+        <img class="frame-thumb" data-frame="6"
+             src="frames/frame_000006.png"
+             onclick="showFrame(6)"
+             alt="Frame 6">
+        <img class="frame-thumb" data-frame="7"
+             src="frames/frame_000007.png"
+             onclick="showFrame(7)"
+             alt="Frame 7">
+        <img class="frame-thumb" data-frame="8"
+             src="frames/frame_000008.png"
+             onclick="showFrame(8)"
+             alt="Frame 8">
+        <img class="frame-thumb" data-frame="9"
+             src="frames/frame_000009.png"
+             onclick="showFrame(9)"
+             alt="Frame 9">
+        <img class="frame-thumb" data-frame="10"
+             src="frames/frame_000010.png"
+             onclick="showFrame(10)"
+             alt="Frame 10">
+        <img class="frame-thumb" data-frame="11"
+             src="frames/frame_000011.png"
+             onclick="showFrame(11)"
+             alt="Frame 11">
+        <img class="frame-thumb" data-frame="12"
+             src="frames/frame_000012.png"
+             onclick="showFrame(12)"
+             alt="Frame 12">
+        <img class="frame-thumb" data-frame="13"
+             src="frames/frame_000013.png"
+             onclick="showFrame(13)"
+             alt="Frame 13">
+        <img class="frame-thumb" data-frame="14"
+             src="frames/frame_000014.png"
+             onclick="showFrame(14)"
+             alt="Frame 14">
+        <img class="frame-thumb" data-frame="15"
+             src="frames/frame_000015.png"
+             onclick="showFrame(15)"
+             alt="Frame 15">
+        <img class="frame-thumb" data-frame="16"
+             src="frames/frame_000016.png"
+             onclick="showFrame(16)"
+             alt="Frame 16">
+        <img class="frame-thumb" data-frame="17"
+             src="frames/frame_000017.png"
+             onclick="showFrame(17)"
+             alt="Frame 17">
+        <img class="frame-thumb" data-frame="18"
+             src="frames/frame_000018.png"
+             onclick="showFrame(18)"
+             alt="Frame 18">
+        <img class="frame-thumb" data-frame="19"
+             src="frames/frame_000019.png"
+             onclick="showFrame(19)"
+             alt="Frame 19">
+        <img class="frame-thumb" data-frame="20"
+             src="frames/frame_000020.png"
+             onclick="showFrame(20)"
+             alt="Frame 20">
+    </div>
+
+    <script>
+        let currentFrame = 0;
+        let startFrame = 0;
+        let endFrame = 20;
+        let isPlaying = false;
+        let animationId = null;
+
+        function showFrame(frameId) {
+            currentFrame = frameId;
+            document.getElementById('frameImage').src = 'frames/frame_' + frameId.toString().padStart(6, '0') + '.png';
+            document.getElementById('currentFrame').textContent = frameId;
+            document.getElementById('frameInfo').textContent = 'Frame ' + frameId.toString().padStart(6, '0');
+
+            // UpdateGraphheight
+            document.querySelectorAll('.frame-thumb').forEach(t => {
+                t.classList.remove('active');
+                if (parseInt(t.dataset.frame) === frameId) {
+                    t.classList.add('active');
+                }
+            });
+        }
+
+        function prevFrame() {
+            if (currentFrame > startFrame) {
+                showFrame(currentFrame - 1);
+            }
+        }
+
+        function nextFrame() {
+            if (currentFrame < endFrame) {
+                showFrame(currentFrame + 1);
+            }
+        }
+
+        function playAnimation() {
+            if (isPlaying) return;
+            isPlaying = true;
+
+            function animate() {
+                if (!isPlaying) return;
+                nextFrame();
+                if (currentFrame >= endFrame) {
+                    currentFrame = startFrame;
+                }
+                animationId = setTimeout(animate, 500);
+            }
+            animate();
+        }
+
+        function pauseAnimation() {
+            isPlaying = false;
+            if (animationId) {
+                clearTimeout(animationId);
+                animationId = null;
+            }
+        }
+
+        // keyNavigation
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft') prevFrame();
+            if (e.key === 'ArrowRight') nextFrame();
+            if (e.key === ' ') {
+                e.preventDefault();
+                if (isPlaying) pauseAnimation();
+                else playAnimation();
+            }
+        });
+
+        // Initialize
+        showFrame(startFrame);
+    </script>
+</body>
+</html>

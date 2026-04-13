@@ -76,6 +76,7 @@ class TrackedObject:
     positions: List[List[float]] = field(default_factory=list)
     velocities: List[List[float]] = field(default_factory=list)
     frame_ids: List[int] = field(default_factory=list)
+    headings: List[float] = field(default_factory=list)  # Heading angles
 
     # Attributes
     obj_type: str = "Unknown"
@@ -581,6 +582,7 @@ class DeepSORTTracker:
         track.positions.append(detection.location.tolist())
         track.velocities.append(detection.velocity.tolist())
         track.frame_ids.append(frame_id)
+        track.headings.append(detection.heading if hasattr(detection, 'heading') else 0.0)
         track.obj_type = detection.obj_type
 
         # UpdateStatistics
@@ -615,6 +617,7 @@ class DeepSORTTracker:
             positions=[detection.location.tolist()],
             velocities=[detection.velocity.tolist()],
             frame_ids=[frame_id],
+            headings=[detection.heading if hasattr(detection, 'heading') else 0.0],
             obj_type=detection.obj_type,
             hits=1,
             age=1,

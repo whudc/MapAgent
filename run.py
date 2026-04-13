@@ -27,6 +27,7 @@ sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "src"))
 
 
+<<<<<<< HEAD
 def check_conda_env():
     """Check if in correct conda environment"""
     env_name = os.environ.get("CONDA_DEFAULT_ENV")
@@ -44,6 +45,9 @@ def check_conda_env():
 
 
 def check_map_file(map_path: str) -> bool:
+=======
+def check_map_file(map_path: str) -> bool:
+>>>>>>> origin/main
     """Check if map file exists"""
     path = Path(map_path)
     if not path.exists():

@@ -378,12 +378,12 @@ class DetectionLoader:
             except Exception:
                 self._data_format = DataFormat.RESULT_ALL_V1
 
-        # 对于 JSON_RESULTS 格式，自动查找 ego 变换文件
-        if self._data_format == DataFormat.JSON_RESULTS and self._ego_transform_path is None:
+        # 对于 JSON_RESULTS 和 RESULT_ALL_V1 格式，自动查找 ego 变换文件
+        if self._data_format in (DataFormat.JSON_RESULTS, DataFormat.RESULT_ALL_V1) and self._ego_transform_path is None:
             self._auto_find_ego_transform_path()
 
         # 加载 ego 变换矩阵
-        if self._data_format == DataFormat.JSON_RESULTS and self._ego_transform_path:
+        if self._data_format in (DataFormat.JSON_RESULTS, DataFormat.RESULT_ALL_V1) and self._ego_transform_path:
             self._load_ego_transforms()
 
     def _auto_find_ego_transform_path(self):
@@ -451,6 +451,10 @@ class DetectionLoader:
     def get_frame_ids(self) -> List[int]:
         """获取所有帧ID列表"""
         return self._sorted_frame_ids
+
+    def get_ego_transform(self, frame_id: int) -> Optional[List[List[float]]]:
+        """获取指定帧的 ego2global 变换矩阵"""
+        return self._ego_transforms.get(frame_id)
 
     def get_timestamps(self) -> List[float]:
         """获取所有时间戳列表"""
@@ -588,6 +592,11 @@ class DetectionLoader:
                     0.0
                 ]
 
+                # heading 从弧度转换为角度
+                import math
+                heading_rad = det.get('heading', 0.0)
+                heading = math.degrees(heading_rad)
+
                 obj = DetectedObject(
                     id=det.get('id', 0),
                     type=det.get('class', 'Unknown'),
@@ -597,9 +606,9 @@ class DetectionLoader:
                         size.get('width', 2.0),
                         size.get('height', 1.5)
                     ),
-                    rotation=(0.0, 0.0, det.get('heading', 0.0)),
+                    rotation=(0.0, 0.0, heading_rad),
                     velocity=tuple(velocity),
-                    heading=det.get('heading', 0.0),
+                    heading=heading,
                     score=det.get('score', 1.0),
                     tracking_id=-1  # 初始化为未分配
                 )
@@ -675,6 +684,26 @@ class DetectionLoader:
             if ego_transform:
                 location = self._transform_point(list(location), ego_transform)
 
+            # 计算 heading：从 rotation[2]（弧度）转换为角度，并应用 ego2global 变换
+            heading = 0.0
+            if rotation:
+                import math
+                # rotation[2] 是局部坐标系下的 yaw（弧度）
+                local_yaw = rotation[2]
+
+                # 如果有 ego 变换，需要将局部 yaw 转换到全局坐标系
+                if ego_transform:
+                    # 从 ego2global 旋转矩阵提取 ego 的 yaw
+                    # R[:2,:2] = [[cos(ego_yaw), -sin(ego_yaw)], [sin(ego_yaw), cos(ego_yaw)]]
+                    ego_yaw = math.atan2(ego_transform[1][0], ego_transform[0][0])
+                    # 全局 yaw = 局部 yaw + ego yaw
+                    global_yaw = local_yaw + ego_yaw
+                    heading = math.degrees(global_yaw)
+                else:
+                    heading = math.degrees(local_yaw)
+
+            # 注意：velocity 已经是全局坐标系下的速度，不需要应用 ego2global 变换
+
             return DetectedObject(
                 id=obj.get('id', 0),
                 type=obj.get('type', 'Unknown'),
@@ -682,7 +711,7 @@ class DetectionLoader:
                 size=tuple(size) if size else (4.0, 2.0, 1.5),
                 rotation=tuple(rotation) if rotation else (0.0, 0.0, 0.0),
                 velocity=tuple(velocity) if velocity else (0.0, 0.0, 0.0),
-                heading=rotation[2] if rotation else 0.0,
+                heading=heading,
                 tracking_id=-1,
                 attribute=obj.get('attribute', {}),
                 num_points=obj.get('num_points', {})

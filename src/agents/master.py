@@ -288,6 +288,9 @@ class MasterAgent:
 
     def _execute_tool(self, name: str, args: Dict) -> Any:
         """Execute tool call"""
+        # Log tool execution
+        print(f"[INFO] 主 Agent: 调用工具 - {name}")
+
         # Lazy loading TrafficFlowAgent (supports LLM enhanced mode)
         if name in ["load_detection_results", "reconstruct_traffic_flow",
                     "get_trajectory_by_id", "save_reconstruction_result",
@@ -299,13 +302,17 @@ class MasterAgent:
                 # Decide whether to enable LLM optimization based on LLM client configuration
                 use_llm = self.llm_client is not None
                 self._traffic_flow_agent = TrafficFlowAgent(context, use_llm=use_llm)
+                print(f"[INFO] 主 Agent: TrafficFlowAgent 已初始化")
 
         try:
             if name == "get_lane_info":
+                print(f"[INFO] 主 Agent: 正在处理地图数据 - 获取车道 {args['lane_id']} 信息...")
                 return self.map_api.get_lane_info(args["lane_id"])
             elif name == "get_centerline_info":
+                print(f"[INFO] 主 Agent: 正在处理地图数据 - 获取中心线 {args['centerline_id']} 信息...")
                 return self.map_api.get_centerline_info(args["centerline_id"])
             elif name == "get_intersection_info":
+                print(f"[INFO] 主 Agent: 正在处理地图数据 - 获取路口 {args['intersection_id']} 信息...")
                 return self.map_api.get_intersection_info(args["intersection_id"])
             elif name == "find_nearest_lane":
                 pos = (args["x"], args["y"], args.get("z", 0))
@@ -335,8 +342,10 @@ class MasterAgent:
             elif name == "get_map_summary":
                 return self.map_api.get_map_summary()
             elif name == "load_detection_results":
+                print(f"[INFO] 主 Agent: 正在加载检测结果 - 路径：{args['path']}...")
                 return self._traffic_flow_agent._load_detection_results(args["path"])
             elif name == "reconstruct_traffic_flow":
+                print(f"[INFO] 主 Agent: 正在重建交通流 - 帧范围：{args.get('start_frame')} 到 {args.get('end_frame')}...")
                 return self._traffic_flow_agent._reconstruct_traffic_flow(
                     args.get("start_frame"),
                     args.get("end_frame"),
@@ -354,6 +363,7 @@ class MasterAgent:
             else:
                 return {"error": f"Unknown tool: {name}"}
         except Exception as e:
+            print(f"[ERROR] 主 Agent: 工具执行失败 - {name}, 错误：{str(e)}")
             return {"error": str(e)}
 
     def chat(self, query: str, **kwargs) -> str:
@@ -369,6 +379,10 @@ class MasterAgent:
         """
         if not self.llm_client:
             return "Error: LLM client not configured. Please set API Key to use."
+
+        # Log start of execution
+        print(f"\n[INFO] 主 Agent: 开始执行任务...")
+        print(f"[INFO] 主 Agent: 用户查询 - {query[:50]}...")
 
         # Build user message with context
         user_content = query
@@ -390,6 +404,7 @@ class MasterAgent:
         self.messages.append({"role": "user", "content": user_content})
 
         # Call LLM
+        print(f"[INFO] 主 Agent: 调用 LLM 模型，正在处理请求...")
         response = self.llm_client.chat(
             messages=self.messages,
             tools=self._tools,
@@ -401,6 +416,8 @@ class MasterAgent:
 
         # Save response
         self.messages.append({"role": "assistant", "content": response})
+
+        print(f"[INFO] 主 Agent: 任务执行完成，结果已生成。")
 
         return response
 

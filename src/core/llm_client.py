@@ -604,7 +604,6 @@ class LLMClient:
     def chat_simple(self, user_message: str, system_prompt: str = "") -> str:
         """简单对话（不使用工具）"""
         messages = [{"role": "user", "content": user_message}]
-        print(f"[DEBUG] chat_simple: model={self.config.model}, base_url={getattr(self.config, 'base_url', 'N/A')}")
         return self._client.chat(messages=messages, system=system_prompt)
 
 

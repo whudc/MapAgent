@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-trafficcentroidTestingScript - triangleGraphComparisoncan
+Traffic Flow Reconstruction Test Script - Three-Column Comparison Visualization
 
-generationComparisonGraph，includetriangleGraph：
-- left：Detectionvalue（annotations）
-- center：DetectionResult（detections）
-- right：TrackingResult（tracking）
+Generates comparison images with three columns:
+- Left: Ground Truth (Annotations)
+- Center: Detection Results (from TrafficFlowAgent internal data)
+- Right: Tracking Results (from TrafficFlowAgent output)
 
-UseMethod:
+Usage:
     python tests/test_traffic_flow_gemma4.py --start 0 --end 100
 """
 
@@ -18,7 +18,7 @@ import argparse
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-# SetProjectPath
+# Set project paths
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "src"))
@@ -29,7 +29,6 @@ import matplotlib.patches as patches
 from matplotlib.transforms import Affine2D
 from matplotlib.animation import FuncAnimation, PillowWriter
 import imageio
-from pathlib import Path
 import tempfile
 import shutil
 
@@ -41,18 +40,18 @@ from core.llm_client import LLMClient, LLMConfig, LLMProvider
 
 def load_annotation_ground_truth(annotation_dir: Path, frame_id: int) -> Tuple[List[Dict], np.ndarray]:
     """
-    LoadvalueandTransformationtoCoordinate
+    Load ground truth annotations and transformation matrix
 
     Args:
-        annotation_dir: Directory (data/00/annotations/result_all_V1)
-        frame_id:  ID
+        annotation_dir: Directory path (data/00/annotations/result_all_V1)
+        frame_id: Frame ID
 
     Returns:
-        (onlist, ego2globalTransformMatrix)
+        (list of annotation objects, ego2global transformation matrix)
     """
     annotation_file = annotation_dir / f"{frame_id:06d}.json"
     if not annotation_file.exists():
-        print(f"Filenotunder: {annotation_file}")
+        print(f"File not found: {annotation_file}")
         return [], np.eye(4)
 
     with open(annotation_file, 'r', encoding='utf-8') as f:
@@ -60,14 +59,14 @@ def load_annotation_ground_truth(annotation_dir: Path, frame_id: int) -> Tuple[L
 
     objects = data.get('objects', [])
 
-    # Get ego2global TransformMatrix
+    # Get ego2global transformation matrix
     ego2global = np.array(data.get('ego2global_transformation_matrix', np.eye(4)))
 
-    # Transformationa（TransformationtoCoordinate）
+    # Transform coordinates to global frame
     result = []
     for obj in objects:
-        #  ego CoordinateTransformationto global Coordinate
-        ego_pos = np.array(obj.get('location', [0, 0, 0]) + [1])  # timeCoordinate
+        # Transform from ego frame to global frame
+        ego_pos = np.array(obj.get('location', [0, 0, 0]) + [1])  # Homogeneous coordinates
         global_pos = ego2global @ ego_pos
         location = global_pos[:3].tolist()
 
@@ -83,57 +82,45 @@ def load_annotation_ground_truth(annotation_dir: Path, frame_id: int) -> Tuple[L
     return result, ego2global
 
 
-def load_detection_results(detection_dir: Path, frame_id: int) -> List[Dict]:
+def get_detection_objects_from_frame(frames: List[Dict], frame_id: int) -> List[Dict]:
     """
-    LoadDetectionResult
+    Extract detection objects from frame data returned by TrafficFlowAgent
+
+    This uses the same data that TrafficFlowAgent uses internally.
 
     Args:
-        detection_dir: DetectionResultDirectory (data/json_results)
-        frame_id:  ID
+        frames: List of frame data from result['frames']
+        frame_id: Frame ID to extract
 
     Returns:
-        DetectionResultlist
+        List of detection objects for the specified frame
     """
-    detection_file = detection_dir / f"00_{frame_id:06d}.json"
-    if not detection_file.exists():
-        print(f"DetectionFilenotunder: {detection_file}")
-        return []
-
-    with open(detection_file, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-
-    detections = data.get('detections', [])
-
-    # Transformationa
-    result = []
-    for det in detections:
-        pos = det.get('position', {})
-        vel = det.get('velocity', {})
-        size = det.get('size', {})
-
-        result.append({
-            'id': det.get('tracking_id', det.get('id', -1)),
-            'type': det.get('class', 'Unknown'),
-            'location': [pos.get('x', 0), pos.get('y', 0), pos.get('z', 0)],
-            'size': [size.get('length', 4), size.get('width', 2), size.get('height', 1.5)],
-            'heading': det.get('heading', 0),
-            'velocity': [vel.get('vx', 0), vel.get('vy', 0), 0],
-            'score': det.get('score', 1.0),
-        })
-
-    return result
+    for frame in frames:
+        if frame.get('frame_id') == frame_id:
+            vehicles = frame.get('vehicles', [])
+            result = []
+            for v in vehicles:
+                result.append({
+                    'id': v.get('vehicle_id', -1),
+                    'type': v.get('vehicle_type', 'Unknown'),
+                    'location': v.get('position', [0, 0, 0]),
+                    'heading': v.get('heading', 0),
+                    'size': [4, 2, 1.5],  # Default vehicle size
+                })
+            return result
+    return []
 
 
 def get_tracking_results_for_frame(trajectories: List[Dict], frame_id: int) -> List[Dict]:
     """
-    FromTrajectorydatacenterGetTrackingResult
+    Get tracking results for a specific frame from trajectory data
 
     Args:
-        trajectories: Trajectorylist
-        frame_id:  ID
+        trajectories: List of trajectories from result['trajectories']
+        frame_id: Frame ID
 
     Returns:
-        Trackingonlist
+        List of tracked objects
     """
     result = []
 
@@ -146,6 +133,7 @@ def get_tracking_results_for_frame(trajectories: List[Dict], frame_id: int) -> L
                     'id': traj.get('vehicle_id', -1),
                     'type': traj.get('vehicle_type', 'Unknown'),
                     'location': pos,
+                    'heading': state.get('heading', 0),
                 })
                 break
 
@@ -153,31 +141,31 @@ def get_tracking_results_for_frame(trajectories: List[Dict], frame_id: int) -> L
 
 
 def get_color_for_type(obj_type: str) -> Tuple[float, float, float]:
-    """RootontypeReturnColor"""
+    """Return color based on object type"""
     colors = {
-        'Car': (0.2, 0.6, 1.0),        # 
+        'Car': (0.2, 0.6, 1.0),        # Blue
         'Vehicle': (0.2, 0.6, 1.0),
-        'Bus': (1.0, 0.6, 0.2),        # 
-        'Truck': (1.0, 0.3, 0.3),      # 
-        'Pedestrian': (0.3, 0.8, 0.3), # 
-        'Cyclist': (0.7, 0.3, 0.9),    # 
+        'Bus': (1.0, 0.6, 0.2),        # Orange
+        'Truck': (1.0, 0.3, 0.3),      # Red
+        'Pedestrian': (0.3, 0.8, 0.3), # Green
+        'Cyclist': (0.7, 0.3, 0.9),    # Purple
         'Motorcycle': (0.7, 0.3, 0.9),
-        'Unknown': (0.5, 0.5, 0.5),    # 
+        'Unknown': (0.5, 0.5, 0.5),    # Gray
     }
     return colors.get(obj_type, (0.5, 0.5, 0.5))
 
 
 def draw_object(ax, obj: Dict, is_tracking: bool = False):
     """
-    underGraphaon
+    Draw a single object
 
     Args:
         ax: matplotlib axes
-        obj: oninfo
-        is_tracking: iswhetherisTrackingResult（TrackingResult，Other）
+        obj: Object information
+        is_tracking: Whether this is a tracking result (tracking results show ID labels)
     """
     location = obj.get('location', [0, 0, 0])
-    x, y = location[0], -location[1]  # Y 
+    x, y = location[0], -location[1]  # Y-axis flip
 
     obj_type = obj.get('type', 'Unknown')
     color = get_color_for_type(obj_type)
@@ -185,23 +173,23 @@ def draw_object(ax, obj: Dict, is_tracking: bool = False):
     obj_id = obj.get('id', -1)
 
     if is_tracking:
-        # TrackingResult：Point + ID 
+        # Tracking result: point + ID label
         ax.scatter(x, y, c=[color], s=100, marker='o', edgecolors='white', linewidths=1)
         ax.annotate(f'ID:{obj_id}', (x, y), textcoords="offset points",
                    xytext=(5, 5), fontsize=8, color='white',
                    bbox=dict(boxstyle='round,pad=0.2', facecolor=color, alpha=0.7))
     else:
-        # Detection/：，notShow ID
+        # Detection/Annotation: draw bounding box
         size = obj.get('size', [4, 2, 1.5])
         length, width = size[0], size[1]
 
-        # GetRotationAngle（heading  rotation）
+        # Get rotation angle (heading or rotation)
         heading = obj.get('heading', None)
         if heading is None:
             rotation = obj.get('rotation', [0, 0, 0])
             heading = rotation[2] if len(rotation) >= 3 else 0
 
-        # Create
+        # Create rectangle
         rect = patches.Rectangle(
             (x - length/2, y - width/2),
             length, width,
@@ -211,7 +199,7 @@ def draw_object(ax, obj: Dict, is_tracking: bool = False):
             alpha=0.3
         )
 
-        # Rotation
+        # Rotate rectangle
         transform = Affine2D().rotate_around(x, y, heading) + ax.transData
         rect.set_transform(transform)
 
@@ -219,7 +207,7 @@ def draw_object(ax, obj: Dict, is_tracking: bool = False):
 
 
 def draw_map_lanes(ax, map_api: Optional[MapAPI], alpha: float = 0.3):
-    """Maplanes"""
+    """Draw map lane lines"""
     if map_api is None:
         return
 
@@ -238,7 +226,7 @@ def draw_map_lanes(ax, map_api: Optional[MapAPI], alpha: float = 0.3):
         coords = lane.coordinates
         if len(coords) >= 2:
             xs = [c[0] for c in coords]
-            ys = [-c[1] for c in coords]  # Y 
+            ys = [-c[1] for c in coords]  # Y-axis flip
             color = lane_colors.get(lane.type, '#CCCCCC')
             ax.plot(xs, ys, color=color, linewidth=1, alpha=alpha)
 
@@ -252,21 +240,21 @@ def generate_frame_comparison_image(
     output_path: Path
 ):
     """
-    generationsingletriangleGraphComparisonGraph
+    Generate three-column comparison image for a single frame
 
     Args:
-        frame_id:  ID
-        gt_objects: valueonlist
-        det_objects: DetectionResultonlist
-        track_objects: TrackingResultonlist
+        frame_id: Frame ID
+        gt_objects: List of ground truth objects
+        det_objects: List of detection results
+        track_objects: List of tracking results
         map_api: Map API
-        output_path: OutputGraphPath
+        output_path: Output image path
     """
-    # CreatetriangleGraph
+    # Create three-column figure
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
     fig.suptitle(f'Frame {frame_id:06d} Comparison', fontsize=14, color='white')
 
-    # SetaCoordinateRange
+    # Set coordinate range
     all_x, all_y = [], []
     for obj in gt_objects + det_objects + track_objects:
         loc = obj.get('location', [0, 0, 0])
@@ -285,27 +273,27 @@ def generate_frame_comparison_image(
     is_tracking_list = [False, False, True]
 
     for ax, title, objects, is_tracking in zip(axes, titles, data_list, is_tracking_list):
-        # Set
+        # Set background
         ax.set_facecolor('#1a1a2e')
         ax.set_xlim(x_min, x_max)
         ax.set_ylim(y_min, y_max)
         ax.set_aspect('equal')
 
-        # Maplanes
+        # Draw map lane lines
         draw_map_lanes(ax, map_api)
 
-        # on
+        # Draw objects
         for obj in objects:
             draw_object(ax, obj, is_tracking=is_tracking)
 
-        # SetandLabel
+        # Set title and labels
         ax.set_title(title, fontsize=12, color='white', pad=10)
         ax.set_xlabel('X (m)', fontsize=10, color='gray')
         ax.set_ylabel('Y (m)', fontsize=10, color='gray')
         ax.tick_params(colors='gray')
         ax.grid(True, alpha=0.2, color='gray')
 
-        # Showoncount
+        # Display object count
         ax.text(0.02, 0.98, f'Count: {len(objects)}',
                transform=ax.transAxes, fontsize=10, color='cyan',
                verticalalignment='top',
@@ -313,16 +301,14 @@ def generate_frame_comparison_image(
 
     plt.tight_layout()
 
-    # Set
+    # Set overall background
     fig.patch.set_facecolor('#0f0f1a')
 
-    # SaveGraph
+    # Save image
     plt.savefig(output_path, dpi=150, facecolor='#0f0f1a', edgecolor='none')
     plt.close(fig)
 
     return output_path
-
-
 
 
 def generate_trajectory_gif(
@@ -336,10 +322,10 @@ def generate_trajectory_gif(
 ):
     """
     Generate GIF animation from trajectory data
-    
+
     Args:
-        frames_dir: Directory containing frame images
-        trajectories: Trajectory list from reconstruction
+        frames_dir: Frame image directory
+        trajectories: List of reconstructed trajectories
         map_api: Map API
         start_frame: Start frame ID
         end_frame: End frame ID
@@ -347,20 +333,20 @@ def generate_trajectory_gif(
         fps: Frames per second
     """
     print(f"\nGenerating GIF animation ({start_frame}-{end_frame})...")
-    
+
     # Create figure for animation
     fig, ax = plt.subplots(1, 1, figsize=(14, 10))
     fig.patch.set_facecolor('#0f0f1a')
     ax.set_facecolor('#1a1a2e')
-    
-    # Get coordinate range from trajectories
+
+    # Get coordinate range from trajectory data
     all_x, all_y = [], []
     for traj in trajectories:
         for state in traj.get('states', []):
             pos = state.get('position', [0, 0, 0])
             all_x.append(pos[0])
             all_y.append(-pos[1])
-    
+
     if all_x and all_y:
         x_margin = (max(all_x) - min(all_x)) * 0.2
         y_margin = (max(all_y) - min(all_y)) * 0.2
@@ -368,20 +354,15 @@ def generate_trajectory_gif(
         y_min, y_max = min(all_y) - y_margin, max(all_y) + y_margin
     else:
         x_min, x_max, y_min, y_max = -50, 150, -100, 50
-    
+
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
     ax.set_aspect('equal')
     ax.grid(True, alpha=0.2, color='gray')
-    
-    # Draw map lanes
+
+    # Draw map lane lines
     draw_map_lanes(ax, map_api, alpha=0.5)
-    
-    # Create artist objects for animation
-    scatter = ax.scatter([], [], c=[], s=100, marker='o', 
-                         edgecolors='white', linewidths=1, alpha=0.8)
-    id_annotations = []
-    
+
     # Build trajectory history for each frame
     traj_history = {}  # track_id -> list of (frame_id, x, y, heading)
     for traj in trajectories:
@@ -392,7 +373,11 @@ def generate_trajectory_gif(
             pos = state.get('position', [0, 0, 0])
             heading = state.get('heading', 0.0)
             traj_history[track_id].append((fid, pos[0], -pos[1], heading))
-    
+
+    # Get coordinate range
+    x_min, x_max = ax.get_xlim()
+    y_min, y_max = ax.get_ylim()
+
     # Animation update function
     def update(frame_id):
         ax.clear()
@@ -401,40 +386,38 @@ def generate_trajectory_gif(
         ax.set_ylim(y_min, y_max)
         ax.set_aspect('equal')
         ax.grid(True, alpha=0.2, color='gray')
-        ax.set_title(f'Frame {frame_id:06d} - Traffic Flow Reconstruction', 
+        ax.set_title(f'Frame {frame_id:06d} - Traffic Flow Reconstruction',
                     fontsize=14, color='white', fontweight='bold')
         ax.set_xlabel('X (m)', fontsize=10, color='gray')
         ax.set_ylabel('Y (m)', fontsize=10, color='gray')
         ax.tick_params(colors='gray')
-        
-        # Draw map lanes
+
+        # Draw map lane lines
         draw_map_lanes(ax, map_api, alpha=0.3)
-        
-        # Draw trajectory trails (past positions)
+
+        # Draw trajectory trails (historical positions)
         for track_id, history in traj_history.items():
             past_positions = [(x, y) for fid, x, y, heading in history if fid <= frame_id]
             if len(past_positions) > 1:
                 trail_x = [p[0] for p in past_positions[-20:]]  # Last 20 frames
                 trail_y = [p[1] for p in past_positions[-20:]]
                 ax.plot(trail_x, trail_y, alpha=0.3, linewidth=1)
-        
-        # Draw current positions with rectangles and heading
+
+        # Draw current positions (rectangle + heading)
         current_ids = []
-        current_headings = []
 
         for track_id, history in traj_history.items():
             for fid, x, y, heading in history:
                 if fid == frame_id:
                     current_ids.append(track_id)
-                    current_headings.append(heading)
-                    # Get color based on trajectory length
+                    # Set color based on trajectory length
                     traj_len = len(history)
                     if traj_len > 50:
-                        color = '#3B82F6'  # Blue - long track
+                        color = '#3B82F6'  # Blue - long trajectory
                     elif traj_len > 20:
-                        color = '#10B981'  # Green - medium track
+                        color = '#10B981'  # Green - medium trajectory
                     else:
-                        color = '#F59E0B'  # Orange - short track
+                        color = '#F59E0B'  # Orange - short trajectory
 
                     # Draw rectangle with heading (vehicle size: 4m x 2m)
                     length, width = 4.0, 2.0
@@ -451,7 +434,7 @@ def generate_trajectory_gif(
                     ax.add_patch(rect)
                     break
 
-        # Add ID annotations
+        # Add ID labels
         for track_id, history in traj_history.items():
             for fid, x, y, heading in history:
                 if fid == frame_id:
@@ -462,46 +445,47 @@ def generate_trajectory_gif(
                                        facecolor='blue' if traj_len > 20 else 'orange',
                                        alpha=0.7))
                     break
-        
+
         # Frame info
         ax.text(0.02, 0.98, f'Frame: {frame_id}/{end_frame} | '
                            f'Vehicles: {len(current_ids)}',
                transform=ax.transAxes, fontsize=11, color='cyan',
                verticalalignment='top',
                bbox=dict(boxstyle='round', facecolor='#1a1a2e', alpha=0.8))
-    
-    # Generate frames
+
+    # Generate frame sequence
     frame_ids = list(range(start_frame, end_frame + 1))
     total_frames = len(frame_ids)
-    
+
     print(f"  Generating {total_frames} frames...")
-    
+
     # Create animation
-    anim = FuncAnimation(fig, update, frames=frame_ids, 
+    anim = FuncAnimation(fig, update, frames=frame_ids,
                         interval=1000/fps, blit=False)
-    
+
     # Save as GIF
     print(f"  Saving to {output_path}...")
-    # Keep reference to anim to prevent garbage collection
+    # Keep anim reference to prevent garbage collection
     anim.save(str(output_path), writer=PillowWriter(fps=fps))
-    
+
     plt.close(fig)
-    print(f"  ✓ GIF saved: {output_path}")
-    
+    print(f"  GIF saved: {output_path}")
+
     return output_path
+
 
 def generate_html_index(frames_dir: Path, start_frame: int, end_frame: int, output_path: Path):
     """
-    generation HTML Indexpage，haveComparisonGraph
+    Generate HTML index page with comparison images
 
     Args:
-        frames_dir: GraphDirectory
-        start_frame: 
-        end_frame: 
-        output_path: Output HTML Path
+        frames_dir: Image directory
+        start_frame: Start frame
+        end_frame: End frame
+        output_path: Output HTML path
     """
     html_content = f'''<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <title>Traffic Flow Comparison - Frames {start_frame}-{end_frame}</title>
@@ -578,13 +562,13 @@ def generate_html_index(frames_dir: Path, start_frame: int, end_frame: int, outp
     </style>
 </head>
 <body>
-    <h1>🚗 Traffic Flow Comparison Visualization</h1>
+    <h1>Traffic Flow Comparison Visualization</h1>
 
     <div class="nav">
-        <button onclick="prevFrame()">◀ Prev</button>
-        <button onclick="nextFrame()">Next ▶</button>
-        <button onclick="playAnimation()">▶ Play</button>
-        <button onclick="pauseAnimation()">⏸ Pause</button>
+        <button onclick="prevFrame()">Prev</button>
+        <button onclick="nextFrame()">Next</button>
+        <button onclick="playAnimation()">Play</button>
+        <button onclick="pauseAnimation()">Pause</button>
         <span style="margin-left: 20px;">Frame: <span id="currentFrame">{start_frame}</span> / {end_frame}</span>
     </div>
 
@@ -597,7 +581,7 @@ def generate_html_index(frames_dir: Path, start_frame: int, end_frame: int, outp
     <div class="frame-list" id="frameList">
 '''
 
-    # AddGraphinterface
+    # Add thumbnail list
     for fid in range(start_frame, end_frame + 1):
         html_content += f'''        <img class="frame-thumb" data-frame="{fid}"
              src="frames/frame_{fid:06d}.png"
@@ -620,7 +604,7 @@ def generate_html_index(frames_dir: Path, start_frame: int, end_frame: int, outp
             document.getElementById('currentFrame').textContent = frameId;
             document.getElementById('frameInfo').textContent = 'Frame ' + frameId.toString().padStart(6, '0');
 
-            // UpdateGraphheight
+            // Update thumbnail highlight
             document.querySelectorAll('.frame-thumb').forEach(t => {
                 t.classList.remove('active');
                 if (parseInt(t.dataset.frame) === frameId) {
@@ -664,7 +648,7 @@ def generate_html_index(frames_dir: Path, start_frame: int, end_frame: int, outp
             }
         }
 
-        // keyNavigation
+        // Keyboard navigation
         document.addEventListener('keydown', (e) => {
             if (e.key === 'ArrowLeft') prevFrame();
             if (e.key === 'ArrowRight') nextFrame();
@@ -685,11 +669,11 @@ def generate_html_index(frames_dir: Path, start_frame: int, end_frame: int, outp
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(html_content)
 
-    print(f"  ✓ HTML IndexalreadySave: {output_path}")
+    print(f"  HTML index saved: {output_path}")
 
 
 def create_gemma4_client(port: int = 8001) -> LLMClient:
-    """Create Gemma4 Localmodels"""
+    """Create Gemma4 local model client"""
     config = LLMConfig(
         provider=LLMProvider.GEMMA4_LOCAL,
         model="Gemma4",
@@ -702,52 +686,52 @@ def create_gemma4_client(port: int = 8001) -> LLMClient:
 
 
 def check_local_model_service(port: int = 8001) -> bool:
-    """CheckLocalmodelsiswhetherRun"""
+    """Check if local model service is running"""
     import requests
     try:
         response = requests.get(f"http://localhost:{port}/v1/models", timeout=5)
         return response.status_code == 200
-    except:
+    except Exception:
         return False
 
 
 def main():
-    parser = argparse.ArgumentParser(description="trafficcentroidTesting - triangleGraphComparisoncan")
-    parser.add_argument("--frames", type=int, default=None, help="Process")
-    parser.add_argument("--start", type=int, default=0, help=" ID")
-    parser.add_argument("--end", type=int, default=10, help=" ID")
-    parser.add_argument("--no-llm", action="store_true", help="Disable LLM Optimization")
-    parser.add_argument("--port", type=int, default=8001, help="LocalmodelsService port")
+    parser = argparse.ArgumentParser(description="Traffic Flow Reconstruction Test - Three-Column Comparison Visualization")
+    parser.add_argument("--frames", type=int, default=None, help="Number of frames to process")
+    parser.add_argument("--start", type=int, default=0, help="Start frame ID")
+    parser.add_argument("--end", type=int, default=10, help="End frame ID")
+    parser.add_argument("--no-llm", action="store_true", help="Disable LLM optimization")
+    parser.add_argument("--port", type=int, default=8001, help="Local model service port")
     parser.add_argument("--annotation-dir", type=str,
                        default="data/00/annotations/result_all_V1",
-                       help="valueDirectory")
+                       help="Ground truth annotation directory")
     parser.add_argument("--detection-dir", type=str,
                        default="data/json_results",
-                       help="DetectionResultDirectory")
+                       help="Detection results directory")
     parser.add_argument("--map-file", type=str,
                        default="data/vector_map.json",
-                       help="MapFile")
+                       help="Map file path")
     parser.add_argument("--output-dir", type=str,
                        default="test_output_gif",
-                       help="OutputDirectory")
-    parser.add_argument("--gif-fps", type=int, default=10, 
+                       help="Output directory")
+    parser.add_argument("--gif-fps", type=int, default=10,
                        help="GIF frames per second")
     parser.add_argument("--no-gif", action="store_true",
                        help="Disable GIF export")
     args = parser.parse_args()
 
     print("=" * 70)
-    print("trafficcentroidTesting - triangleGraphComparisoncan")
+    print("Traffic Flow Reconstruction Test - Three-Column Comparison Visualization")
     print("=" * 70)
 
-    # CreateOutputDirectory
+    # Create output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(exist_ok=True)
 
     frames_dir = output_dir / "frames"
     frames_dir.mkdir(exist_ok=True)
 
-    # SetParameter
+    # Set parameters
     use_llm = not args.no_llm
     start_frame = args.start
     end_frame = args.end
@@ -756,55 +740,56 @@ def main():
     detection_dir = Path(args.detection_dir)
 
     print(f"\nConfiguration:")
-    print(f"  Directory: {annotation_dir}")
-    print(f"  DetectionDirectory: {detection_dir}")
-    print(f"  OutputDirectory: {output_dir}")
-    print(f"  Range: {start_frame} - {end_frame}")
-    print(f"  LLM Optimization: {'Enable (Gemma4)' if use_llm else 'Disable'}")
+    print(f"  Annotation directory: {annotation_dir}")
+    print(f"  Detection directory: {detection_dir}")
+    print(f"  Output directory: {output_dir}")
+    print(f"  Frame range: {start_frame} - {end_frame}")
+    print(f"  LLM optimization: {'Enabled (Gemma4)' if use_llm else 'Disabled'}")
 
-    # CheckLocalmodels
+    # Check local model service
     if use_llm:
-        print(f"\nCheck Gemma4  (port {args.port})...")
+        print(f"\nChecking Gemma4 service (port {args.port})...")
         if check_local_model_service(args.port):
-            print("  ✓ Gemma4 Runcenter")
+            print("  Gemma4 service is running")
         else:
-            print("  ✗ Gemma4 notRun!")
-            print("  Use DeepSORT ...")
+            print("  Gemma4 service is not running!")
+            print("  Will use pure DeepSORT mode...")
             use_llm = False
 
-    # LoadMap
-    print("\nLoadMap...")
+    # Load map
+    print("\nLoading map...")
     try:
         map_api = MapAPI(map_file=args.map_file)
-        print(f"  ✓ MapLoadto: {map_api.map.get_lane_count()} lanes")
+        print(f"  Map loaded successfully: {map_api.map.get_lane_count()} lanes")
     except FileNotFoundError:
-        print(f"  ✗ MapFilenotto: {args.map_file}")
+        print(f"  Map file not found: {args.map_file}")
         map_api = None
 
-    # Create LLM 
+    # Create LLM client
     llm_client = None
     if use_llm:
         try:
             llm_client = create_gemma4_client(args.port)
-            print(f"  ✓ Gemma4 Createto")
+            print(f"  Gemma4 client created successfully")
         except Exception as e:
-            print(f"  ✗ Create Gemma4 fail: {e}")
+            print(f"  Failed to create Gemma4 client: {e}")
             use_llm = False
 
-    # Create Agent
-    print("\nCreate TrafficFlowAgent...")
+    # Create TrafficFlowAgent
+    print("\nCreating TrafficFlowAgent...")
     context = AgentContext(map_api=map_api, llm_client=llm_client)
     agent = TrafficFlowAgent(context, use_llm=use_llm)
-    print(f"  Agent: {agent.name}")
-    print(f"  : {'LLM iterationOptimization' if use_llm else ' DeepSORT'}")
+    print(f"  Agent name: {agent.name}")
+    print(f"  Mode: {'LLM Hybrid Optimization' if use_llm else 'Pure DeepSORT'}")
 
-    # Executecentroid
-    print("\ntrafficcentroid...")
+    # Execute traffic flow reconstruction
+    # Note: TrafficFlowAgent internally creates DetectionLoader and manages all tracking
+    print("\nExecuting traffic flow reconstruction...")
     start_time = time.time()
 
     result = agent.process(
-        query="DetectionResultcentroidtraffic",
-        detection_path=detection_dir,
+        query="Reconstruct traffic flow",
+        detection_path=str(detection_dir),
         start_frame=start_frame,
         end_frame=end_frame,
         output_path=str(output_dir / "reconstruction_result.json")
@@ -812,31 +797,38 @@ def main():
 
     elapsed_time = time.time() - start_time
 
-    # PrintResult
+    # Print results
     print("\n" + "=" * 70)
-    print("centroidResult")
+    print("Reconstruction Results")
     print("=" * 70)
 
     if result.get('success'):
+        # Get data from result (same as main code uses)
         trajectories = result.get('trajectories', [])
+        frames = result.get('frames', [])  # Frame data from TrafficFlowAgent internal
         total_frames = result.get('total_frames', 0)
         statistics = result.get('statistics', {})
 
-        print(f"  ✓ centroidto!")
-        print(f"  : {total_frames}")
-        print(f"  Trajectory: {len(trajectories)}")
-        print(f"  : {elapsed_time:.2f} seconds")
+        print(f"  Reconstruction completed!")
+        print(f"  Total frames: {total_frames}")
+        print(f"  Total trajectories: {len(trajectories)}")
+        print(f"  Elapsed time: {elapsed_time:.2f} seconds")
 
-        # generationComparisonGraph
-        print("\ngenerationComparisonGraph...")
+        # Generate comparison images
+        print("\nGenerating comparison images...")
 
         for frame_id in range(start_frame, end_frame + 1):
-            # Loadthree types ofdata
+            # Load ground truth from annotation files
             gt_objects, ego2global = load_annotation_ground_truth(annotation_dir, frame_id)
-            det_objects = load_detection_results(detection_dir, frame_id)
+
+            # Get detection results from TrafficFlowAgent internal frame data
+            # This is consistent with main code - uses the same data
+            det_objects = get_detection_objects_from_frame(frames, frame_id)
+
+            # Get tracking results from trajectories
             track_objects = get_tracking_results_for_frame(trajectories, frame_id)
 
-            # generationComparisonGraph
+            # Generate comparison image
             img_path = frames_dir / f"frame_{frame_id:06d}.png"
 
             generate_frame_comparison_image(
@@ -848,13 +840,13 @@ def main():
                 output_path=img_path
             )
 
-            print(f"  ✓ Frame {frame_id:06d}: GT={len(gt_objects)}, Det={len(det_objects)}, Track={len(track_objects)}")
+            print(f"  Frame {frame_id:06d}: GT={len(gt_objects)}, Det={len(det_objects)}, Track={len(track_objects)}")
 
-        # generation HTML Index
-        print("\ngeneration HTML ...")
+        # Generate HTML index
+        print("\nGenerating HTML index page...")
         html_path = output_dir / "index.html"
         generate_html_index(frames_dir, start_frame, end_frame, html_path)
-        
+
         # Generate GIF animation
         if not args.no_gif:
             print("\nGenerating GIF animation...")
@@ -869,7 +861,7 @@ def main():
                 fps=args.gif_fps
             )
 
-        # Savedatawill
+        # Save data and summary
         summary = {
             'success': True,
             'total_frames': total_frames,
@@ -887,16 +879,16 @@ def main():
             json.dump(summary, f, indent=2, ensure_ascii=False, default=str)
 
     else:
-        print(f"  ✗ centroidfail: {result.get('error', 'Unknown error')}")
+        print(f"  Reconstruction failed: {result.get('error', 'Unknown error')}")
 
     print("\n" + "=" * 70)
-    print("Testingto!")
-    print(f"OutputDirectory: {output_dir}")
-    print(f"\nViewResult:")
-    print(f"  Open {output_dir}/index.html haveComparison")
-    print(f"  GraphDirectory: {frames_dir}")
+    print("Test completed!")
+    print(f"Output directory: {output_dir}")
+    print(f"\nView results:")
+    print(f"  Open {output_dir}/index.html to view comparison images")
+    print(f"  Image directory: {frames_dir}")
     if not args.no_gif:
-        print(f"  GIF Animation: {output_dir}/trajectories.gif")
+        print(f"  GIF animation: {output_dir}/trajectories.gif")
     print("=" * 70)
 
 

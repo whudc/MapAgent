@@ -27,27 +27,8 @@ sys.path.insert(0, str(project_root))
 sys.path.insert(0, str(project_root / "src"))
 
 
-<<<<<<< HEAD
-def check_conda_env():
-    """Check if in correct conda environment"""
-    env_name = os.environ.get("CONDA_DEFAULT_ENV")
-    conda_prefix = os.environ.get("CONDA_PREFIX")
-
-    # Check environment name
-    if env_name and "mapagent" in env_name.lower():
-        return True
-
-    # Check path
-    if conda_prefix and "mapagent" in conda_prefix.lower():
-        return True
-
-    return False
-
 
 def check_map_file(map_path: str) -> bool:
-=======
-def check_map_file(map_path: str) -> bool:
->>>>>>> origin/main
     """Check if map file exists"""
     path = Path(map_path)
     if not path.exists():
@@ -154,23 +135,6 @@ Environment variables:
     )
 
     args = parser.parse_args()
-
-    # Check conda environment
-    if not check_conda_env():
-        print("\n" + "=" * 50)
-        print("  Warning：Not detected mapagent conda Environment")
-        print("=" * 50)
-        print("\nPlease activate conda environment first:")
-        print("  conda activate mapagent")
-        print("\nOr directly use Python in environment:")
-        print("  D:\\program\\conda_envs\\mapagnet\\python.exe run.py", args.mode)
-        print("=" * 50)
-
-        # Try to continue using current Python path
-        if "mapagent" in sys.executable.lower():
-            print("\nDetected executable path contains mapagent, continuing...\n")
-        else:
-            print("\nWill continue using current Python environment\n")
 
     if args.mode == "chat":
         run_chat_mode(args)

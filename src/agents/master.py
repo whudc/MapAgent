@@ -18,6 +18,7 @@ if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
 from core.llm_client import LLMClient, LLMConfig
+from core.llm_client import LLMProvider
 from apis.map_api import MapAPI
 
 
@@ -471,26 +472,16 @@ def create_master_agent(
     else:
         map_api = MapAPI()
 
-    # Configure LLM
-    provider_map = {
-        "anthropic": "anthropic",
-        "claude": "anthropic",
-        "deepseek": "deepseek",
-        "openai": "openai",
-        "local": "local",
-        "qwen": "qwen_local",
-        "qwen_local": "qwen_local",
-        "gemma4": "gemma4_local",
-        "gemma4_local": "gemma4_local",
-    }
+    # Configure LLM - 使用统一配置
+    from config.providers import get_provider, get_default_model, get_base_url, is_local_model
 
     # Get LLM config (priority: parameters, then settings, then env vars)
     if llm_provider:
-        provider = provider_map.get(llm_provider, llm_provider)
+        provider = get_provider(llm_provider)
     elif use_settings and settings:
-        provider = provider_map.get(settings.llm_provider, settings.llm_provider)
+        provider = get_provider(settings.llm_provider)
     else:
-        provider = provider_map.get(os.getenv("LLM_PROVIDER", "anthropic"), "anthropic")
+        provider = get_provider(os.getenv("LLM_PROVIDER", "anthropic"))
 
     model = llm_model
     if not model:
@@ -502,31 +493,21 @@ def create_master_agent(
     # Get API Key (use dummy key for local models)
     resolved_api_key = api_key
     if not resolved_api_key:
-        if provider in ["qwen_local", "gemma4_local", "local"]:
+        if is_local_model(provider):
             resolved_api_key = "dummy"
         elif use_settings and settings and settings.llm_api_key:
             resolved_api_key = settings.llm_api_key
-        elif provider == "anthropic":
+        elif provider == LLMProvider.ANTHROPIC:
             resolved_api_key = os.getenv("ANTHROPIC_API_KEY")
-        elif provider == "deepseek":
+        elif provider == LLMProvider.DEEPSEEK:
             resolved_api_key = os.getenv("DEEPSEEK_API_KEY")
-        elif provider == "openai":
+        elif provider == LLMProvider.OPENAI:
             resolved_api_key = os.getenv("OPENAI_API_KEY")
 
     # Get base_url
-    base_url = None
-    if provider == "qwen_local":
-        base_url = os.getenv("QWEN_BASE_URL", "http://localhost:8000/v1")
-    elif provider == "gemma4_local":
-        base_url = os.getenv("GEMMA4_BASE_URL", "http://localhost:8001/v1")
-    elif provider == "local":
-        base_url = os.getenv("LLM_BASE_URL", "http://localhost:8000/v1")
-    elif use_settings and settings and settings.llm_base_url:
+    base_url = os.getenv("LLM_BASE_URL") or get_base_url(provider)
+    if use_settings and settings and settings.llm_base_url and not base_url:
         base_url = settings.llm_base_url
-    else:
-        base_url = os.getenv("LLM_BASE_URL")
-        if not base_url and provider == "deepseek":
-            base_url = "https://api.deepseek.com"
 
     # Create LLM client (if no API Key, create Agent without LLM)
     llm_client = None

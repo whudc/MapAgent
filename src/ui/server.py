@@ -491,7 +491,7 @@ def reconstruct_traffic_flow():
     use_llm = data.get('use_llm', False)
     llm_provider = data.get('llm_provider', 'deepseek')
     llm_api_key = data.get('llm_api_key', '')
-    llm_port = data.get('llm_port', 8000)
+    llm_port = data.get('llm_port', 8001 if llm_provider == 'gemma4' else 8000)
 
     # 清空之前的推理记录
     _llm_reasoning_cache = []
@@ -536,7 +536,17 @@ def reconstruct_traffic_flow():
                 "qwen": LLMProvider.QWEN_LOCAL,
                 "gemma4": LLMProvider.GEMMA4_LOCAL,
             }
-            provider = provider_map.get(llm_provider, LLMProvider.DEEPSEEK)
+
+            # 检查是否需要 API Key
+            needs_api_key = llm_provider not in ["qwen", "gemma4", "qwen_local", "gemma4_local", "local"]
+
+            # 如果没有提供 API Key 且需要 API Key，则默认切换到本地模型
+            if not llm_api_key and needs_api_key:
+                print(f"[WARNING] 未提供 API Key，默认切换到本地 Qwen 模型")
+                llm_provider = "qwen"
+                needs_api_key = False
+
+            provider = provider_map.get(llm_provider, LLMProvider.QWEN_LOCAL)
 
             # 设置环境变量
             if llm_api_key:
@@ -570,22 +580,39 @@ def reconstruct_traffic_flow():
                 }
                 model_name = default_models.get(llm_provider, "")
 
+            # 获取 API Key：本地模型使用 "dummy"，其他提供商必须有真实 API key
+            resolved_api_key = llm_api_key or os.getenv(f"{llm_provider.upper()}_API_KEY")
+            if not resolved_api_key:
+                # 此时 llm_provider 一定是本地模型（上面已处理），使用 "dummy"
+                resolved_api_key = "dummy"
+
+            # 获取 base_url
+            base_url = None
+            if llm_provider == "qwen":
+                base_url = f"http://localhost:{llm_port}/v1"
+            elif llm_provider == "gemma4":
+                base_url = f"http://localhost:{llm_port}/v1"
+            elif llm_provider == "deepseek":
+                base_url = "https://api.deepseek.com"
+            elif llm_provider == "anthropic":
+                base_url = "https://api.anthropic.com"
+            elif llm_provider == "openai":
+                base_url = "https://api.openai.com/v1"
+
             config = LLMConfig(
                 provider=provider,
                 model=model_name,
-                api_key=llm_api_key or os.getenv(f"{llm_provider.upper()}_API_KEY") or "dummy",
+                api_key=resolved_api_key,
+                base_url=base_url,
             )
-            # 设置 DeepSeek 的 base_url 和模型
-            if llm_provider == "deepseek":
-                config.base_url = "https://api.deepseek.com"
-                config.model = "deepseek-chat"  # 使用有效的模型名称
-
             llm_client = LLMClient(config)
             # 显示 API Key 前缀用于验证
             key_prefix = config.api_key[:10] + "..." if config.api_key and len(config.api_key) > 10 else (config.api_key or "EMPTY")
             print(f"[DEBUG] LLM Client created: provider={provider}, model={config.model}, api_key={key_prefix}, base_url={config.base_url}")
 
+        print(f"[DEBUG] Before AgentContext: llm_client={llm_client is not None}, use_llm={use_llm}")
         context = AgentContext(map_api=map_api, llm_client=llm_client)
+        print(f"[DEBUG] After AgentContext: context.llm_client={context.llm_client is not None}")
         tf_agent = TrafficFlowAgent(context, use_llm=use_llm)
 
         # 调试输出：Agent 状态

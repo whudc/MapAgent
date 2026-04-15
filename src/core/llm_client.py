@@ -11,8 +11,10 @@ import os
 import json
 from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass, field
-from enum import Enum
 from abc import ABC, abstractmethod
+
+# 使用统一的提供商配置
+from config.providers import LLMProvider, PROVIDER_MAP, DEFAULT_MODELS, get_base_url, is_local_model
 
 try:
     from anthropic import Anthropic
@@ -25,16 +27,6 @@ try:
     HAS_OPENAI = True
 except ImportError:
     HAS_OPENAI = False
-
-
-class LLMProvider(str, Enum):
-    """LLM 提供商"""
-    ANTHROPIC = "anthropic"
-    DEEPSEEK = "deepseek"
-    OPENAI = "openai"
-    LOCAL = "local"
-    QWEN_LOCAL = "qwen_local"  # 本地 Qwen 模型
-    GEMMA4_LOCAL = "gemma4_local"  # 本地 Gemma4 模型
 
 
 @dataclass
@@ -60,31 +52,13 @@ class LLMConfig:
         """从环境变量加载配置"""
         provider_str = os.getenv("LLM_PROVIDER", "anthropic").lower()
 
-        provider_map = {
-            "anthropic": LLMProvider.ANTHROPIC,
-            "claude": LLMProvider.ANTHROPIC,
-            "deepseek": LLMProvider.DEEPSEEK,
-            "openai": LLMProvider.OPENAI,
-            "local": LLMProvider.LOCAL,
-            "qwen_local": LLMProvider.QWEN_LOCAL,
-            "qwen": LLMProvider.QWEN_LOCAL,
-            "gemma4_local": LLMProvider.GEMMA4_LOCAL,
-            "gemma4": LLMProvider.GEMMA4_LOCAL,
-        }
-        provider = provider_map.get(provider_str, LLMProvider.ANTHROPIC)
+        # 使用统一配置获取 provider
+        from config.providers import get_provider, get_default_model, get_base_url, is_local_model
+
+        provider = get_provider(provider_str)
 
         # 项目根目录
         project_root = os.getenv("PROJECT_ROOT", "/data/DC/MapAgent")
-
-        # 根据提供商选择默认模型
-        default_models = {
-            LLMProvider.ANTHROPIC: "claude-sonnet-4-6",
-            LLMProvider.DEEPSEEK: "deepseek-chat",  # DeepSeek 有效模型：deepseek-chat, deepseek-coder
-            LLMProvider.OPENAI: "gpt-4o",
-            LLMProvider.LOCAL: "Qwen3_5",
-            LLMProvider.QWEN_LOCAL: "Qwen3_5",
-            LLMProvider.GEMMA4_LOCAL: "Gemma4",
-        }
 
         # 根据提供商选择 API key
         api_key = None
@@ -98,16 +72,7 @@ class LLMConfig:
             api_key = "dummy"  # 本地模型不需要真实 API key
 
         # base_url
-        base_url = os.getenv("LLM_BASE_URL")
-        if not base_url:
-            if provider == LLMProvider.DEEPSEEK:
-                base_url = "https://api.deepseek.com"
-            elif provider == LLMProvider.LOCAL:
-                base_url = "http://localhost:8000/v1"
-            elif provider == LLMProvider.QWEN_LOCAL:
-                base_url = os.getenv("QWEN_BASE_URL", "http://localhost:8000/v1")
-            elif provider == LLMProvider.GEMMA4_LOCAL:
-                base_url = os.getenv("GEMMA4_BASE_URL", "http://localhost:8001/v1")
+        base_url = os.getenv("LLM_BASE_URL") or get_base_url(provider_str)
 
         # 本地模型类型
         local_model_type = None
@@ -118,7 +83,7 @@ class LLMConfig:
 
         return cls(
             provider=provider,
-            model=os.getenv("LLM_MODEL", default_models.get(provider, "")),
+            model=os.getenv("LLM_MODEL", get_default_model(provider_str)),
             api_key=api_key,
             base_url=base_url,
             max_tokens=int(os.getenv("LLM_MAX_TOKENS", "4096")),

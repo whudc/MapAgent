@@ -26,18 +26,19 @@ from apis.map_api import MapAPI
 from agents.master import MasterAgent, create_master_agent
 from core.llm_client import LLMClient, LLMConfig
 from config import settings
+from config.providers import PROVIDER_NAMES, DEFAULT_MODELS, LOCAL_MODEL_PORTS, is_local_model
 
 
 # 支持的模型提供商
 MODEL_PROVIDERS = {
-    "deepseek": {"name": "Deepseek", "default_model": "deepseek-chat", "need_key": True},
-    "anthropic": {"name": "Anthropic Claude", "default_model": "claude-sonnet-4-6", "need_key": True},
-    "openai": {"name": "OpenAI", "default_model": "gpt-4o", "need_key": True},
-    "qwen": {"name": "Qwen (本地)", "default_model": "Qwen3_5", "need_key": False, "port": 8000},
-    "qwen_local": {"name": "Qwen (本地)", "default_model": "Qwen3_5", "need_key": False, "port": 8000},
-    "gemma4": {"name": "Gemma4 (本地)", "default_model": "Gemma4", "need_key": False, "port": 8001},
-    "gemma4_local": {"name": "Gemma4 (本地)", "default_model": "Gemma4", "need_key": False, "port": 8001},
-    "local": {"name": "本地模型", "default_model": "Qwen3_5", "need_key": False, "port": 8000},
+    "deepseek": {"name": PROVIDER_NAMES.get("deepseek", "Deepseek"), "default_model": DEFAULT_MODELS.get("deepseek", "deepseek-chat"), "need_key": True},
+    "anthropic": {"name": PROVIDER_NAMES.get("anthropic", "Anthropic Claude"), "default_model": DEFAULT_MODELS.get("anthropic", "claude-sonnet-4-6"), "need_key": True},
+    "openai": {"name": PROVIDER_NAMES.get("openai", "OpenAI"), "default_model": DEFAULT_MODELS.get("openai", "gpt-4o"), "need_key": True},
+    "qwen": {"name": PROVIDER_NAMES.get("qwen", "Qwen (本地)"), "default_model": DEFAULT_MODELS.get("qwen_local", "Qwen3_5"), "need_key": False, "port": LOCAL_MODEL_PORTS.get("qwen", 8000)},
+    "qwen_local": {"name": PROVIDER_NAMES.get("qwen_local", "Qwen (本地)"), "default_model": DEFAULT_MODELS.get("qwen_local", "Qwen3_5"), "need_key": False, "port": LOCAL_MODEL_PORTS.get("qwen_local", 8000)},
+    "gemma4": {"name": PROVIDER_NAMES.get("gemma4", "Gemma4 (本地)"), "default_model": DEFAULT_MODELS.get("gemma4_local", "Gemma4"), "need_key": False, "port": LOCAL_MODEL_PORTS.get("gemma4", 8001)},
+    "gemma4_local": {"name": PROVIDER_NAMES.get("gemma4_local", "Gemma4 (本地)"), "default_model": DEFAULT_MODELS.get("gemma4_local", "Gemma4"), "need_key": False, "port": LOCAL_MODEL_PORTS.get("gemma4_local", 8001)},
+    "local": {"name": PROVIDER_NAMES.get("local", "本地模型"), "default_model": DEFAULT_MODELS.get("local", "Qwen3_5"), "need_key": False, "port": LOCAL_MODEL_PORTS.get("local", 8000)},
 }
 
 

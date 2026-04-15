@@ -1,20 +1,12 @@
 """MapAgent Source package"""
 
-import sys
-from pathlib import Path
-
-# Ensure module import
-_root = Path(__file__).parent
-if str(_root) not in sys.path:
-    sys.path.insert(0, str(_root))
-
-from models.map_data import (
+from .models.map_data import (
     LaneLine,
     Centerline,
     VectorMap,
     MapLoader,
 )
-from models.agent_io import (
+from .models.agent_io import (
     IntentType,
     Intent,
     SceneQuery,
@@ -24,10 +16,9 @@ from models.agent_io import (
     PathQuery,
     PathResult,
 )
-from core.llm_client import LLMClient, LLMConfig
-from core.tools import ToolRegistry
-from apis.map_api import MapAPI
-from agents import (
+from .core.llm_client import LLMClient, LLMConfig
+from .apis.map_api import MapAPI
+from .agents import (
     SceneAgent,
     BehaviorAgent,
     PathAgent,
@@ -55,7 +46,6 @@ __all__ = [
     # Core
     "LLMClient",
     "LLMConfig",
-    "ToolRegistry",
     # API
     "MapAPI",
     # Agents

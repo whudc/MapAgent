@@ -1,11 +1,11 @@
 """
 Agent 基类
 
-定义 Agent 的基本接口和工具注册机制
+定义 Agent 的基本接口
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Any, Optional, Callable
+from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
 import sys
 from pathlib import Path
@@ -15,8 +15,7 @@ _root = Path(__file__).parent.parent
 if str(_root) not in sys.path:
     sys.path.insert(0, str(_root))
 
-from core.llm_client import LLMClient, LLMConfig
-from core.tools import ToolRegistry
+from core.llm_client import LLMClient
 from apis.map_api import MapAPI
 
 
@@ -41,20 +40,11 @@ class BaseAgent(ABC):
         self.context = context
         self.map_api = context.map_api
         self.llm_client = context.llm_client
-        self.tools = ToolRegistry()
-
-        # 注册工具
-        self._register_tools()
-
-    def _register_tools(self):
-        """注册工具，子类可重写"""
+        # 构建工具处理函数映射
+        self._tool_handlers: Dict[str, callable] = {}
         for tool in self.get_tools():
-            self.tools.register(
-                name=tool["name"],
-                description=tool["description"],
-                parameters=tool["parameters"],
-                handler=tool.get("handler")
-            )
+            if "handler" in tool:
+                self._tool_handlers[tool["name"]] = tool["handler"]
 
     @abstractmethod
     def get_tools(self) -> List[Dict]:
@@ -77,11 +67,25 @@ class BaseAgent(ABC):
 
     def get_tool_definitions(self) -> List[Dict]:
         """获取工具定义（用于 LLM Function Calling）"""
-        return self.tools.get_all_definitions()
+        tools = self.get_tools()
+        return [
+            {
+                "name": t["name"],
+                "description": t["description"],
+                "input_schema": {
+                    "type": "object",
+                    "properties": t["parameters"],
+                }
+            }
+            for t in tools
+        ]
 
     def execute_tool(self, name: str, **kwargs) -> Any:
         """执行工具"""
-        return self.tools.execute(name, **kwargs)
+        handler = self._tool_handlers.get(name)
+        if not handler:
+            raise ValueError(f"Tool not found: {name}")
+        return handler(**kwargs)
 
     def get_system_prompt(self) -> str:
         """获取系统提示，子类可重写"""

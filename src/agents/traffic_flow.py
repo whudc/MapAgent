@@ -1455,11 +1455,13 @@ Usage:
         for track_id, traj in trajectories.items():
             frame_ids = traj.frame_ids if hasattr(traj, 'frame_ids') else []
             positions = traj.positions if hasattr(traj, 'positions') else []
+            velocities = traj.velocities if hasattr(traj, 'velocities') else []
 
             if len(frame_ids) < 2:
                 continue
 
-            headings = {}
+            # 第一步：基于轨迹方向计算初始朝向
+            headings_dict = {}
             for i, frame_id in enumerate(frame_ids):
                 if i == 0 and len(frame_ids) > 1:
                     # 第一帧：使用第一帧和第二帧的位置差计算运动方向（向前差分）
@@ -1496,54 +1498,76 @@ Usage:
                         # 运动方向作为朝向
                         heading = math.degrees(math.atan2(dy, dx))
 
-                headings[frame_id] = heading
+                headings_dict[frame_id] = heading
 
-            # 如果启用 LLM，进行平滑优化
-            if use_llm and self._llm_optimizer and self._llm_optimizer.llm_client and len(headings) > 2:
-                headings = self._smooth_headings_with_llm(track_id, headings, frame_ids)
+            # 第二步：如果启用 LLM，进行平滑优化
+            if use_llm and self._llm_optimizer and self._llm_optimizer.llm_client and len(frame_ids) >= 3:
+                headings_dict = self._smooth_headings_with_llm(
+                    track_id, headings_dict, frame_ids, positions, velocities
+                )
 
-            heading_optimized[track_id] = headings
+            heading_optimized[track_id] = headings_dict
 
         return heading_optimized
 
     def _smooth_headings_with_llm(self, track_id: int, headings: Dict[int, float],
-                                   frame_ids: List[int]) -> Dict[int, float]:
+                                   frame_ids: List[int], positions: List[List[float]],
+                                   velocities: List[List[float]]) -> Dict[int, float]:
         """
         使用 LLM 对朝向序列进行平滑优化
 
+        复用 LLMOptimizer.analyze_heading_consistency 方法，提供更完整的朝向分析
+
         LLM 分析：
         1. 检测异常的朝向跳变（非物理运动）
-        2. 基于轨迹平滑性进行修正
+        2. 基于轨迹方向进行修正
+        3. 考虑速度方向的一致性
+
+        Args:
+            track_id: 轨迹 ID
+            headings: 朝向字典 {frame_id: heading_degrees}
+            frame_ids: 帧 ID 列表
+            positions: 位置列表
+            velocities: 速度列表
+
+        Returns:
+            修正后的朝向字典
         """
-        # 构建 LLM 输入
-        heading_series = [(fid, headings.get(fid, 0)) for fid in frame_ids]
+        # 将度数转换为弧度（LLMOptimizer 使用弧度）
+        headings_rad = {fid: math.radians(h) for fid, h in headings.items()}
+        headings_list = [headings_rad.get(fid, 0) for fid in frame_ids]
 
-        prompt = f"""
-分析车辆轨迹的朝向序列，识别异常的朝向跳变并进行平滑修正。
+        # 调用 LLMOptimizer 的朝向分析方法
+        llm_result = self._llm_optimizer.analyze_heading_consistency(
+            track_id=track_id,
+            headings=headings_list,
+            positions=positions,
+            velocities=velocities,
+            frame_ids=frame_ids
+        )
 
-Track ID: {track_id}
-朝向序列（frame_id: heading_degrees）:
-{json.dumps(heading_series, indent=2)}
+        # 解析结果
+        corrected_headings = llm_result.get('corrected_headings', headings_list)
 
-车辆运动特性：
-1. 朝向变化应该是连续的，不会出现突然的 180 度跳变
-2. 正常车辆的角速度一般不超过 30 度/帧（假设 10Hz）
-3. 如果相邻帧朝向差异 > 90 度，很可能是检测噪声
+        # 转换回度数
+        if isinstance(corrected_headings, list):
+            headings_rad_list = corrected_headings
+        else:
+            headings_rad_list = list(corrected_headings.values())
 
-请分析并返回修正后的朝向序列（JSON 格式）：
-{{
-    "anomalies": [{{"frame_id": X, "original": Y, "corrected": Z, "reason": "..."}}],
-    "smoothed_headings": {{frame_id: heading, ...}}
-}}
-"""
+        headings_corrected = {}
+        for i, frame_id in enumerate(frame_ids):
+            if i < len(headings_rad_list):
+                headings_corrected[frame_id] = math.degrees(headings_rad_list[i])
+            else:
+                headings_corrected[frame_id] = headings.get(frame_id, 0)
 
-        try:
-            response = self._llm_optimizer.llm_client.chat(prompt)
-            result = json.loads(response)
-            return result.get('smoothed_headings', headings)
-        except Exception:
-            # LLM 失败时返回原始数据
-            return headings
+        # 记录优化结果
+        issues_found = llm_result.get('issues_found', 'unknown')
+        if issues_found != 'smooth':
+            log_info(f"[Heading Opt] Track {track_id}: {issues_found}")
+
+        return headings_corrected
 
     def process(self, query: str, **kwargs) -> Dict[str, Any]:
         """
@@ -1821,21 +1845,16 @@ Track ID: {track_id}
         if not frames:
             return {"success": False, "error": "No frame data loaded"}
 
-        # Create enhanced tracker (lane-aware + interpolation)
-        from .lane_aware_tracker import LaneAwareTracker
+        # Create enhanced tracker (use DeepSORTTracker)
+        from .deepsort_tracker import DeepSORTTracker
 
-        self._tracker = LaneAwareTracker(
+        self._tracker = DeepSORTTracker(
             map_api=self.map_api if use_lane_constraint else None,
             max_distance=max_distance,
             max_velocity=max_velocity,
             frame_interval=0.1,
             min_hits=1,      # 立即确认轨迹，快速建立初始目标
             max_misses=10,   # 10 帧未匹配即删除，避免幽灵轨迹累积
-            use_map=use_lane_constraint,
-            lane_weight=0.3,
-            max_lane_distance=3.0,
-            interpolation_enabled=use_interpolation,
-            max_interpolation_frames=5,
         )
 
         # Reset state
@@ -1871,9 +1890,9 @@ Track ID: {track_id}
                 prev_lane_tracks = self._get_lane_constrained_tracks()
 
         # After tracking, batch LLM analysis of complete trajectories (secondary optimization)
-        # Currently commented - only keep frame-to-frame ID consistency analysis
-        # if self._use_llm and self._llm_optimizer and self.map_api:
-        #     self._llm_batch_analyze_trajectories(frames)
+        # Includes: ID jump detection/merge, heading optimization, lane count analysis
+        if self._use_llm and self._llm_optimizer and self.map_api:
+            self._llm_batch_analyze_trajectories(frames)
 
         # Build trajectories (with interpolation frames)
         self._build_trajectories_with_interpolation()
